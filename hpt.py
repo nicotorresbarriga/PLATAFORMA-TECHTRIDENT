@@ -28,7 +28,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ----------------- NUEVO ESTILO DE BOTONES 3D AZUL MARINO -----------------
 st.markdown(
     """
     <style>
@@ -90,13 +89,11 @@ st.markdown(
         opacity: 1;
     }
     
-    /* Hacer los recuadros de cantidad compactos, pero sin ocultar los botones de restar o sumar */
     div[data-testid="stNumberInput"] {
         max-width: 140px !important;
         min-width: 120px !important;
     }
     
-    /* Estilo profesional para el Panel de Control (Contenedores con borde) */
     div[data-testid="stVerticalBlockBorderWrapper"] {
         background: linear-gradient(180deg, rgba(15, 55, 105, 0.4) 0%, rgba(10, 36, 69, 0.8) 100%) !important;
         border-radius: 16px !important;
@@ -142,7 +139,6 @@ if 'db_centros_areas' not in st.session_state:
 if 'db_centros_correos' not in st.session_state: 
     st.session_state.db_centros_correos = {"Centro Punta Vergara": "contacto@techtrident.cl"}
 
-# BASE DE DATOS DE ROVS EN MEMORIA (ACTUALIZADO N SERIES)
 if 'db_rovs' not in st.session_state:
     st.session_state.db_rovs = {
         1: {"nombre": "ROV 1", "serie_rov": "12992601117", "serie_ctrl": "12992601117", "mantencion": datetime.date(2026, 8, 2)},
@@ -151,7 +147,6 @@ if 'db_rovs' not in st.session_state:
 if 'rov_activo' not in st.session_state:
     st.session_state.rov_activo = 1
 
-# HISTORIAL DE MANTENCIONES ROV
 if 'historial_mantenciones' not in st.session_state:
     st.session_state.historial_mantenciones = []
 
@@ -180,6 +175,11 @@ if 'hpt_step' not in st.session_state: st.session_state.hpt_step = 1
 if 'hpt_pdf_generado' not in st.session_state: st.session_state.hpt_pdf_generado = None
 if 'rd_pdf_generado' not in st.session_state: st.session_state.rd_pdf_generado = None
 
+# Nuevas variables de estado para el Informe Consolidado
+if 'ic_pdf_generado' not in st.session_state: st.session_state.ic_pdf_generado = None
+if 'anomalias' not in st.session_state: st.session_state.anomalias = []
+if 'ic_data' not in st.session_state: st.session_state.ic_data = {}
+
 if 'hpt_data' not in st.session_state:
     opciones_c = list(st.session_state.db_centros_areas.keys())
     st.session_state.hpt_data = {
@@ -198,7 +198,6 @@ def set_page(page_name): st.session_state.current_page = page_name
 def set_step(step_number): st.session_state.hpt_step = step_number
 
 def obtener_ruta_logo():
-    """Busca el archivo de logo de TechTrident de forma absoluta y segura."""
     directorio_actual = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
     posibles = [
         "logo_techtrident.png", "logo_techtrident.PNG", "logo_techtrident.jpg", "Logo_techtrident.png",
@@ -217,7 +216,6 @@ def obtener_ruta_logo():
     return None
 
 def optimizar_imagen_ram(file_bytes_or_path, max_dim=800):
-    """Comprime imágenes pesadas en memoria RAM para evitar que el servidor colapse (OOM)."""
     try:
         if isinstance(file_bytes_or_path, bytes):
             img = Image.open(io.BytesIO(file_bytes_or_path))
@@ -250,7 +248,206 @@ def procesar_firma(canvas_obj, filename):
         return True
     return False
 
-# ---------------- MOTOR PDF ACTUALIZADO PARA FOTOS ESPECÍFICAS DE ROVS ----------------
+def generar_pdf_consolidado(datos, anomalias, logo_filename, rov_cover, nombre_archivo):
+    """Genera el Informe Consolidado unificado para inspecciones de ROV."""
+    pdf = FPDF(orientation='P', unit='mm', format='A4')
+    pdf.set_auto_page_break(auto=True, margin=15)
+    
+    # 1. Portada
+    pdf.add_page()
+    if logo_filename and os.path.exists(logo_filename):
+        try:
+            pdf.image(logo_filename, x=15, y=15, w=40)
+        except: pass
+        
+    pdf.set_y(45)
+    pdf.set_font("Arial", 'B', 22)
+    pdf.set_text_color(15, 55, 105)
+    pdf.cell(0, 15, "INFORME DE INSPECCION SUBMARINA", border=0, ln=True, align='C')
+    pdf.set_font("Arial", 'I', 14)
+    pdf.set_text_color(100, 100, 100)
+    pdf.cell(0, 10, "CONSOLIDADO DE HALLAZGOS Y REPARACIONES", border=0, ln=True, align='C')
+    pdf.ln(10)
+    
+    if rov_cover and os.path.exists(rov_cover):
+        try:
+            pdf.image(rov_cover, x=35, y=pdf.get_y(), w=140)
+            pdf.set_y(pdf.get_y() + 100)
+        except:
+            pdf.ln(100)
+    else:
+        pdf.ln(80)
+        
+    pdf.set_fill_color(15, 55, 105)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(180, 10, "  DATOS GENERALES DE LA INSPECCION", border=0, ln=True, fill=True)
+    
+    pdf.set_text_color(0, 0, 0)
+    h_c = 8
+    
+    def add_row(l1, v1, l2, v2):
+        pdf.set_font("Arial", 'B', 10)
+        pdf.cell(40, h_c, l1, border=1)
+        pdf.set_font("Arial", '', 10)
+        pdf.cell(50, h_c, str(v1)[:30], border=1)
+        pdf.set_font("Arial", 'B', 10)
+        pdf.cell(40, h_c, l2, border=1)
+        pdf.set_font("Arial", '', 10)
+        pdf.cell(50, h_c, str(v2)[:30], border=1, ln=True)
+
+    add_row("Cliente:", datos.get("cliente", ""), "Centro:", datos.get("centro", ""))
+    add_row("Fecha:", datos.get("fecha", ""), "Encargado:", datos.get("encargado", ""))
+    add_row("Piloto ROV:", datos.get("piloto", ""), "Equipo ROV:", datos.get("equipo", ""))
+    
+    # 2. Planimetria
+    if datos.get("planimetria"):
+        pdf.add_page()
+        pdf.set_font("Arial", 'B', 14)
+        pdf.set_fill_color(15, 55, 105)
+        pdf.set_text_color(255, 255, 255)
+        pdf.cell(0, 10, "  1. ESQUEMA DEL CENTRO DE CULTIVO", border=0, ln=True, fill=True)
+        pdf.ln(5)
+        try:
+            temp_path = f"temp_pl_{uuid.uuid4().hex[:6]}.jpg"
+            bytes_opt = optimizar_imagen_ram(datos["planimetria"], max_dim=1200)
+            with open(temp_path, "wb") as f: f.write(bytes_opt)
+            with Image.open(temp_path) as pil_img:
+                w, h = pil_img.size
+                aspect = h / w
+                w_mm = 180
+                h_mm = w_mm * aspect
+                if h_mm > 220:
+                    h_mm = 220
+                    w_mm = h_mm / aspect
+            pdf.image(temp_path, x=(210-w_mm)/2, y=pdf.get_y(), w=w_mm, h=h_mm)
+            pdf.set_y(pdf.get_y() + h_mm + 10)
+            os.remove(temp_path)
+        except Exception as e:
+            pdf.set_text_color(0,0,0)
+            pdf.cell(0, 10, f"No se pudo procesar la planimetria.", ln=True)
+
+    # 3. Cards
+    if anomalias:
+        pdf.add_page()
+        pdf.set_font("Arial", 'B', 14)
+        pdf.set_fill_color(15, 55, 105)
+        pdf.set_text_color(255, 255, 255)
+        pdf.cell(0, 10, "  2. REPORTE FOTOGRAFICO POR JAULA", border=0, ln=True, fill=True)
+        pdf.ln(5)
+        
+        anomalias_por_jaula = {}
+        for a in anomalias:
+            j = a.get('jaula', 'N/A')
+            if j not in anomalias_por_jaula:
+                anomalias_por_jaula[j] = []
+            anomalias_por_jaula[j].append(a)
+            
+        for jaula, lista_anomalias in anomalias_por_jaula.items():
+            pdf.set_font("Arial", 'B', 12)
+            pdf.set_text_color(15, 55, 105)
+            pdf.cell(0, 8, f"Jaula Operada: {jaula}", border='B', ln=True)
+            pdf.ln(4)
+            
+            for idx, anomalia in enumerate(lista_anomalias):
+                if pdf.get_y() > 200:
+                    pdf.add_page()
+                    pdf.set_font("Arial", 'B', 12)
+                    pdf.set_text_color(15, 55, 105)
+                    pdf.cell(0, 8, f"Jaula Operada: {jaula} (Continuacion)", border='B', ln=True)
+                    pdf.ln(4)
+                    
+                y_start = pdf.get_y()
+                pdf.set_fill_color(240, 245, 250)
+                pdf.rect(15, y_start, 180, 85, 'F')
+                
+                pdf.set_y(y_start + 2)
+                pdf.set_font("Arial", 'B', 9)
+                pdf.set_text_color(0, 0, 0)
+                desc_safe = str(anomalia.get('descripcion','')).encode('latin-1', 'replace').decode('latin-1')
+                pdf.cell(180, 5, f"  Hallazgo {idx+1}: {desc_safe} | Red: {anomalia.get('tipo_red','')}", ln=True)
+                pdf.set_font("Arial", '', 8)
+                pdf.cell(180, 5, f"  Ubicacion: {anomalia.get('ubicacion','')} | Profundidad: {anomalia.get('profundidad','')}m | Estado: {anomalia.get('estado','')}", ln=True)
+                
+                y_img = pdf.get_y() + 2
+                
+                def render_foto(foto_data, title, x_pos):
+                    if foto_data:
+                        try:
+                            temp = f"t_foto_{uuid.uuid4().hex[:6]}.jpg"
+                            with open(temp, "wb") as f: f.write(optimizar_imagen_ram(foto_data, 600))
+                            
+                            pdf.set_font("Arial", 'B', 8)
+                            pdf.set_xy(x_pos, y_img)
+                            pdf.cell(85, 4, title, align='C', ln=True)
+                            
+                            with Image.open(temp) as img:
+                                asp = img.height / img.width
+                                w = 80
+                                h = w * asp
+                                if h > 55:
+                                    h = 55
+                                    w = h / asp
+                            pdf.image(temp, x=x_pos + (85-w)/2, y=y_img+4, w=w, h=h)
+                            os.remove(temp)
+                        except: pass
+                
+                render_foto(anomalia.get('foto_rotura'), "ANTES (ROTURA)", 15)
+                render_foto(anomalia.get('foto_reparacion'), "DESPUES (REPARACION)", 110)
+                
+                pdf.set_y(y_start + 88)
+
+    # 4. Matriz de Resultados (Landscape)
+    pdf.add_page(orientation='L')
+    pdf.set_font("Arial", 'B', 14)
+    pdf.set_fill_color(15, 55, 105)
+    pdf.set_text_color(255, 255, 255)
+    pdf.cell(0, 10, "  3. RESULTADOS DE LA INSPECCION (MATRIZ)", border=0, ln=True, fill=True)
+    pdf.ln(5)
+    
+    cols = [
+        ("Nro", 10), ("Fecha", 25), ("Jaula", 20), ("Tipo Red", 25), 
+        ("Anomalia / Hallazgo", 70), ("Ubicacion", 30), ("Prof.", 15), ("Estado", 25), ("Servicio", 50)
+    ]
+    pdf.set_font("Arial", 'B', 9)
+    pdf.set_fill_color(230, 230, 230)
+    pdf.set_text_color(0, 0, 0)
+    for col_name, width in cols:
+        pdf.cell(width, 8, col_name, border=1, fill=True, align='C')
+    pdf.ln()
+    
+    pdf.set_font("Arial", '', 8)
+    for i, a in enumerate(anomalias):
+        if a['estado'].lower() == 'reparada':
+            pdf.set_text_color(0, 128, 0) 
+        else:
+            pdf.set_text_color(200, 0, 0) 
+            
+        desc_safe = str(a.get('descripcion','')).replace('\n', ' ')[:45].encode('latin-1', 'replace').decode('latin-1')
+        
+        pdf.cell(cols[0][1], 8, str(i+1), border=1, align='C')
+        pdf.cell(cols[1][1], 8, str(datos.get('fecha', '')), border=1, align='C')
+        pdf.cell(cols[2][1], 8, str(a.get('jaula', ''))[:10], border=1, align='C')
+        pdf.cell(cols[3][1], 8, str(a.get('tipo_red', ''))[:15], border=1, align='C')
+        pdf.cell(cols[4][1], 8, desc_safe, border=1)
+        pdf.cell(cols[5][1], 8, str(a.get('ubicacion', ''))[:18], border=1, align='C')
+        pdf.cell(cols[6][1], 8, str(a.get('profundidad', '')), border=1, align='C')
+        pdf.cell(cols[7][1], 8, str(a.get('estado', '')), border=1, align='C')
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(cols[8][1], 8, "Inspeccion ROV", border=1, align='C')
+        pdf.ln()
+
+    if datos.get("observaciones"):
+        pdf.ln(10)
+        pdf.set_font("Arial", 'B', 10)
+        pdf.cell(0, 6, "OBSERVACIONES FINALES:", ln=True)
+        pdf.set_font("Arial", '', 9)
+        obs_safe = str(datos.get("observaciones")).encode('latin-1', 'replace').decode('latin-1')
+        pdf.multi_cell(0, 6, obs_safe)
+
+    pdf.output(nombre_archivo)
+    return nombre_archivo
+
 def generar_pdf_entrega(datos, logo_filename, nombre_archivo, firma_path=None, diccionario_fotos=None, folio="", correlativo=""):
     pdf = FPDF()
     pdf.set_margins(10, 10, 10)
@@ -323,14 +520,12 @@ def generar_pdf_entrega(datos, logo_filename, nombre_archivo, firma_path=None, d
                 pdf.cell(95, 8, i1, border=b_str, ln=0)
                 pdf.cell(95, 8, i2, border=b_str2, ln=1)
 
-    # 1. INFO GENERAL
     print_section_header("1. INFORMACION GENERAL")
     print_row_2("Piloto Entrante:", d1.get("Piloto_Entrante"), "Piloto Saliente:", d1.get("Piloto_Saliente"))
     print_row_2("Fecha:", d1.get("Fecha"), "Centro:", d1.get("Centro"))
     pdf.set_font("Arial", "B", 9); pdf.cell(35, h_cell, "Area Asignada:", border=1); pdf.set_font("Arial", "", 9); pdf.cell(155, h_cell, str(d1.get("Área"))[:80], border=1, ln=True)
     pdf.ln(4)
 
-    # 2. EQUIPOS
     d2 = datos.get("2. Estado de los Equipos (ROV)", {})
     if pdf.get_y() > 240: pdf.add_page()
     print_section_header("2. ESTADO DE LOS EQUIPOS (ROV)")
@@ -340,7 +535,6 @@ def generar_pdf_entrega(datos, logo_filename, nombre_archivo, firma_path=None, d
     print_multiline("Observaciones de Equipos", d2.get("Observaciones_Equipos"))
     pdf.ln(4)
 
-    # 3. TERRENO
     d3 = datos.get("3. Terreno", {})
     if pdf.get_y() > 240: pdf.add_page()
     print_section_header("3. INFRAESTRUCTURA DE TERRENO")
@@ -349,7 +543,6 @@ def generar_pdf_entrega(datos, logo_filename, nombre_archivo, firma_path=None, d
     print_multiline("Observaciones de Infraestructura", d3.get("Observaciones_Equipamiento"))
     pdf.ln(4)
 
-    # 4 & 5. INVENTARIO
     d4 = datos.get("4. Herramientas", {})
     d5 = datos.get("5. Materiales de Mantención", {})
     if pdf.get_y() > 220: pdf.add_page()
@@ -360,7 +553,6 @@ def generar_pdf_entrega(datos, logo_filename, nombre_archivo, firma_path=None, d
     print_list("Materiales/Insumos Faltantes", d5.get("Materiales_Faltantes", []))
     pdf.ln(4)
 
-    # 6. OPERATIVA
     d6 = datos.get("6. Operativa de Turno (14 días)", {})
     if pdf.get_y() > 200: pdf.add_page()
     print_section_header("5. RESUMEN OPERATIVO DEL TURNO (14 DIAS)")
@@ -370,7 +562,6 @@ def generar_pdf_entrega(datos, logo_filename, nombre_archivo, firma_path=None, d
     print_multiline("Observaciones Generales", d6.get("Observaciones_Generales"))
     pdf.ln(8)
 
-    # FIRMAS
     if pdf.get_y() > 220: pdf.add_page()
     pdf.set_fill_color(15, 55, 105); pdf.set_text_color(255, 255, 255)
     pdf.set_font("Arial", "B", 10); pdf.cell(190, 8, "  6. FIRMAS DE RESPONSABILIDAD", border=0, ln=True, fill=True)
@@ -381,7 +572,6 @@ def generar_pdf_entrega(datos, logo_filename, nombre_archivo, firma_path=None, d
         pdf.image(firma_path, x=85, y=pdf.get_y()-22, w=40, h=18)
     pdf.set_font("Arial", "B", 9); pdf.cell(190, 8, f"Firma Piloto ROV Saliente: {piloto_saliente}", border=1, align="C", ln=True)
 
-    # EVIDENCIA FOTOGRAFICA ESPECÍFICA (MODIFICADO)
     if diccionario_fotos:
         pdf.add_page()
         pdf.set_font("Helvetica", 'B', 11)
@@ -392,7 +582,6 @@ def generar_pdf_entrega(datos, logo_filename, nombre_archivo, firma_path=None, d
         col_img = 0; row_y = pdf.get_y(); max_h_row = 0
         for titulo, img_file in diccionario_fotos.items():
             temp_path = f"temp_{uuid.uuid4().hex[:6]}.jpg"
-            
             bytes_optimizados = optimizar_imagen_ram(img_file.getvalue())
             
             with open(temp_path, "wb") as f: 
@@ -408,12 +597,10 @@ def generar_pdf_entrega(datos, logo_filename, nombre_archivo, firma_path=None, d
             
             x_pos = 15 if col_img == 0 else 110
             
-            # Imprimir Título
             pdf.set_xy(x_pos, row_y)
             pdf.set_font("Arial", 'B', 8)
             pdf.cell(w_mm, 5, titulo, border=0, align='C', ln=2)
             
-            # Imprimir Foto
             y_foto = pdf.get_y()
             pdf.rect(x_pos - 1, y_foto - 1, w_mm + 2, h_mm + 2)
             pdf.image(temp_path, x=x_pos, y=y_foto, w=w_mm, h=h_mm)
@@ -467,12 +654,10 @@ elif st.session_state.current_page == 'main_menu':
     st.markdown("<h1 style='text-align: center;'>Sistema de Gestión Operativa</h1>", unsafe_allow_html=True)
     st.write(f"Operador en turno: **{st.session_state.current_user}**")
     
-    # ---------------- LOGICA ALERTA DE LUNES PARA ROVS ----------------
     es_lunes = datetime.date.today().weekday() == 0
     if es_lunes and not st.session_state.get('monday_alert_dismissed', False):
         st.warning("📅 **Rotación Semanal de Equipos ROV (Día Lunes)**")
         rov_actual_id = st.session_state.rov_activo
-        # Buscar el siguiente ROV (Asumimos 2 por simplicidad para la alerta)
         rov_standby_id = 2 if rov_actual_id == 1 else 1
         
         st.write(f"Es hora de cambiar al equipo {rov_standby_id}. ¿Deseas realizar el cambio ahora?")
@@ -631,7 +816,6 @@ elif st.session_state.current_page == 'main_menu':
                         }
                         st.success(f"Equipo {new_rov_name} registrado exitosamente.")
 
-            # NUEVO: TAB DE HISTORIAL DE MANTENCIONES
             with tab_historial_rovs:
                 st.write("**Historial de Mantenciones Declaradas en Terreno**")
                 if st.session_state.historial_mantenciones:
@@ -648,14 +832,150 @@ elif st.session_state.current_page == 'main_menu':
         if st.button("📈 GRÁFICOS GERENCIALES", use_container_width=True): set_page('panel_graficos'); st.rerun()
     with c2:
         if st.button("🚢 REPORTE DIARIO", use_container_width=True): set_page('reporte_diario'); st.rerun()
+        if st.button("📑 INFORME CONSOLIDADO", use_container_width=True): set_page('informe_consolidado'); st.rerun()
         if st.button("📊 HISTORIAL / AUDITORÍA", use_container_width=True): set_page('modulo_busqueda'); st.rerun()
-        if st.button("🔒 Cerrar Sesión", use_container_width=True):
-            st.session_state.logged_in = False
-            st.session_state.current_user = ""
-            st.session_state.admin_acceso_historial = False
-            st.session_state.admin_acceso_graficos = False
-            set_page('login')
-            st.rerun()
+        
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("🔒 Cerrar Sesión", use_container_width=True):
+        st.session_state.logged_in = False
+        st.session_state.current_user = ""
+        st.session_state.admin_acceso_historial = False
+        st.session_state.admin_acceso_graficos = False
+        set_page('login')
+        st.rerun()
+
+elif st.session_state.current_page == 'informe_consolidado':
+    st.button("⬅️ Volver al Menú Principal", on_click=set_page, args=('main_menu',))
+    st.markdown("<h1 style='text-align: center;'>📑 Informe Consolidado Operativo</h1>", unsafe_allow_html=True)
+    st.divider()
+
+    tab1, tab2, tab3 = st.tabs(["1️⃣ Contexto", "2️⃣ Registro de Anomalías", "3️⃣ Compilar y Generar PDF"])
+
+    with tab1:
+        st.subheader("Datos de la Inspección")
+        c1, c2 = st.columns(2)
+        with c1:
+            ic_cliente = st.selectbox("Empresa / Cliente", ["Salmones Blumar", "Salmones Blumar Magallanes", "Otra Empresa"])
+            opciones_centros = list(st.session_state.db_centros_areas.keys())
+            ic_centro = st.selectbox("Centro de Cultivo", opciones_centros)
+            ic_fecha = st.date_input("Fecha de Inspección", value=datetime.date.today())
+        with c2:
+            ic_encargado = st.text_input("Encargado de Centro", value=st.session_state.ic_data.get("encargado", ""))
+            ic_piloto = st.text_input("Piloto ROV", value=st.session_state.current_user)
+            ic_equipo = st.selectbox("Equipo ROV Utilizado", ["DTG3", "MC Petrohue", "Chasing Promax", "Chasing Promax 2", "Fifish vs xpert"])
+            
+        ic_planimetria = st.file_uploader("📸 Subir Planimetría del Centro (Esquema de Jaulas)", type=['jpg', 'jpeg', 'png'])
+        
+        if st.button("Guardar Datos Contexto", type="primary"):
+            st.session_state.ic_data.update({
+                "cliente": ic_cliente, "centro": ic_centro, "fecha": ic_fecha,
+                "encargado": ic_encargado, "piloto": ic_piloto, "equipo": ic_equipo,
+                "planimetria": ic_planimetria.getvalue() if ic_planimetria else st.session_state.ic_data.get("planimetria")
+            })
+            st.success("✅ Datos de contexto guardados exitosamente. Ahora ve a la pestaña 2 para registrar hallazgos.")
+
+    with tab2:
+        st.subheader("Registro Dinámico de Anomalías")
+        with st.form("form_anomalia", clear_on_submit=True):
+            col_a1, col_a2 = st.columns(2)
+            with col_a1:
+                jaula = st.text_input("N° o ID de Jaula")
+                tipo_red = st.selectbox("Tipo de Red", ["Pecera", "Lobera", "Pajarera"])
+                desc = st.text_area("Descripción de la Anomalía")
+            with col_a2:
+                ubicacion = st.text_input("Ubicación (Ej: Sur-Oeste, Fondo)")
+                profundidad = st.number_input("Profundidad (metros)", min_value=0.0, step=0.1)
+                estado = st.selectbox("Estado Operativo", ["Reparada", "Pendiente"])
+                
+            st.markdown("**Evidencia Fotográfica**")
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                foto_antes = st.file_uploader("Foto Antes (Rotura/Hallazgo)", type=['jpg', 'jpeg', 'png'], key="ic_f1")
+            with col_f2:
+                foto_despues = st.file_uploader("Foto Después (Reparación)", type=['jpg', 'jpeg', 'png'], key="ic_f2")
+                
+            if st.form_submit_button("➕ Agregar Anomalía a la Matriz", use_container_width=True):
+                if not jaula or not desc:
+                    st.error("⚠️ La Jaula y la Descripción son obligatorias para registrar.")
+                else:
+                    nueva_anomalia = {
+                        "id": str(uuid.uuid4())[:6],
+                        "jaula": jaula,
+                        "tipo_red": tipo_red,
+                        "descripcion": desc,
+                        "ubicacion": ubicacion,
+                        "profundidad": profundidad,
+                        "estado": estado,
+                        "foto_rotura": foto_antes.getvalue() if foto_antes else None,
+                        "foto_reparacion": foto_despues.getvalue() if foto_despues else None
+                    }
+                    st.session_state.anomalias.append(nueva_anomalia)
+                    st.success(f"✅ Anomalía registrada exitosamente en Jaula {jaula}.")
+        
+        st.markdown("---")
+        st.markdown(f"### Anomalías Registradas en Memoria ({len(st.session_state.anomalias)})")
+        if not st.session_state.anomalias:
+            st.info("No hay anomalías registradas aún. Use el formulario superior.")
+        else:
+            for i, an in enumerate(st.session_state.anomalias):
+                with st.container(border=True):
+                    c_an1, c_an2 = st.columns([5, 1])
+                    with c_an1:
+                        st.markdown(f"**{i+1}. Jaula {an['jaula']} ({an['tipo_red']})**")
+                        st.write(f"{an['descripcion']} | Prof: {an['profundidad']}m | Ubicación: {an['ubicacion']}")
+                        st.markdown(f"Estado: **{an['estado']}**")
+                    with c_an2:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        if st.button("❌ Eliminar", key=f"del_{an['id']}", use_container_width=True):
+                            st.session_state.anomalias.pop(i)
+                            st.rerun()
+
+    with tab3:
+        st.subheader("Compilación y Generación del Informe")
+        ic_observaciones = st.text_area("Observaciones Generales de la Inspección", placeholder="Escriba aquí los comentarios globales, conclusiones o recomendaciones de la faena...", height=150)
+        
+        if st.button("📥 CONSOLIDAR Y GENERAR PDF", type="primary", use_container_width=True):
+            if not st.session_state.ic_data:
+                st.error("⚠️ Error: Debe guardar los datos de contexto en la Pestaña 1 primero.")
+            else:
+                if not st.session_state.anomalias:
+                    st.warning("Aviso: Generando reporte sin anomalías registradas.")
+                
+                st.session_state.ic_data["observaciones"] = ic_observaciones
+                
+                with st.spinner("Compilando arquitectura del PDF y procesando evidencia fotográfica..."):
+                    nombre_pdf = f"Consolidado_{st.session_state.ic_data.get('centro','Centro')}_{st.session_state.ic_data.get('fecha')}_{uuid.uuid4().hex[:6]}.pdf"
+                    try:
+                        logo_path = obtener_ruta_logo()
+                        rov_cover = "rov_cover.jpg" if os.path.exists("rov_cover.jpg") else None
+                        
+                        pdf_generado = generar_pdf_consolidado(
+                            datos=st.session_state.ic_data, 
+                            anomalias=st.session_state.anomalias, 
+                            logo_filename=logo_path, 
+                            rov_cover=rov_cover, 
+                            nombre_archivo=nombre_pdf
+                        )
+                        
+                        st.session_state.ic_pdf_generado = pdf_generado
+                        st.success("✅ Informe Consolidado Generado con Éxito.")
+                    except Exception as e:
+                        st.error(f"Falla técnica al generar el PDF: {str(e)}")
+                        
+        if st.session_state.get("ic_pdf_generado") and os.path.exists(st.session_state.ic_pdf_generado):
+            with open(st.session_state.ic_pdf_generado, "rb") as f:
+                st.download_button(
+                    label="📥 DESCARGAR INFORME CONSOLIDADO (.pdf)", 
+                    data=f, 
+                    file_name=st.session_state.ic_pdf_generado, 
+                    mime="application/pdf", 
+                    use_container_width=True,
+                )
+            if st.button("📝 CREAR NUEVO INFORME (Limpiar)", type="secondary", use_container_width=True):
+                st.session_state.anomalias = []
+                st.session_state.ic_data = {}
+                st.session_state.ic_pdf_generado = None
+                st.rerun()
 
 elif st.session_state.current_page == 'hpt_menu':
     st.button("⬅️ Volver al Menú Principal", on_click=set_page, args=('main_menu',))
@@ -886,7 +1206,7 @@ elif st.session_state.current_page == 'hpt_nuevo':
 
                     pdf.set_fill_color(15, 55, 105); pdf.set_text_color(255, 255, 255)
                     pdf.set_font("Arial", "B", 9); pdf.cell(190, 6, "1. DATOS OPERATIVOS", border=0, ln=True, fill=True)
-                    pdf.ln(1) # Respiro visual
+                    pdf.ln(1)
                     pdf.set_text_color(0, 0, 0)
                     
                     pdf.set_font("Arial", "B", 8); pdf.cell(35, 6, "Empresa / Mandante:", border=1); pdf.set_font("Arial", "", 8); pdf.cell(60, 6, data.get('empresa', '')[:35], border=1)
@@ -907,7 +1227,7 @@ elif st.session_state.current_page == 'hpt_nuevo':
                     pdf.set_font("Arial", "B", 8)
                     pdf.set_fill_color(15, 55, 105); pdf.set_text_color(255, 255, 255)
                     pdf.cell(190, 6, "Faena Primaria y Detalles Especificos:", border=0, ln=True, fill=True)
-                    pdf.ln(1) # Respiro visual
+                    pdf.ln(1)
                     pdf.set_text_color(0, 0, 0)
                     pdf.set_font("Arial", "", 8)
                     texto_tarea = f"FAENA: {data.get('faena', '')}\nDETALLES: {data.get('tarea', '')}"
@@ -916,7 +1236,7 @@ elif st.session_state.current_page == 'hpt_nuevo':
                     pdf.ln(2)
                     pdf.set_fill_color(15, 55, 105); pdf.set_text_color(255, 255, 255)
                     pdf.set_font("Arial", "B", 9); pdf.cell(190, 6, "2. EQUIPO DE PROTECCION PERSONAL SELECCIONADO", border=0, ln=True, fill=True)
-                    pdf.ln(1) # Respiro visual
+                    pdf.ln(1)
                     pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", "", 8)
                     epp_labels = ["Guantes", "Chaleco", "Zapatos", "Ropa Termica", "Traje Agua", "Comunicacion", "Botiquin"]
                     epp_vals = data.get('epp', []); epp_seleccionados = [epp_labels[i] for i in range(len(epp_labels)) if i < len(epp_vals) and epp_vals[i]]
@@ -927,7 +1247,7 @@ elif st.session_state.current_page == 'hpt_nuevo':
                     pdf.ln(2)
                     pdf.set_fill_color(15, 55, 105); pdf.set_text_color(255, 255, 255)
                     pdf.set_font("Arial", "B", 9); pdf.cell(190, 6, "3. VERIFICACIONES CLAVES DE SEGURIDAD", border=0, ln=True, fill=True)
-                    pdf.ln(1) # Respiro visual
+                    pdf.ln(1)
                     pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", "", 8)
                     
                     def print_check(pregunta, respuesta):
@@ -942,7 +1262,7 @@ elif st.session_state.current_page == 'hpt_nuevo':
                     pdf.ln(2)
                     pdf.set_fill_color(15, 55, 105); pdf.set_text_color(255, 255, 255)
                     pdf.set_font("Arial", "B", 9); pdf.cell(190, 6, "4. RIESGOS CRITICOS EVALUADOS (ERC)", border=0, ln=True, fill=True)
-                    pdf.ln(1) # Respiro visual
+                    pdf.ln(1)
                     pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", "", 8)
                     erc_labels = ["Izaje", "Buceo", "Eq. Electricos", "Caidas", "Navegacion", "Atrapamiento"]
                     erc_vals = data.get('erc', []); erc_seleccionados = [erc_labels[i] for i in range(len(erc_labels)) if i < len(erc_vals) and erc_vals[i]]
@@ -953,7 +1273,7 @@ elif st.session_state.current_page == 'hpt_nuevo':
                     pdf.ln(2)
                     pdf.set_fill_color(15, 55, 105); pdf.set_text_color(255, 255, 255)
                     pdf.set_font("Arial", "B", 9); pdf.cell(190, 6, "5. DIFUSION Y TOMA DE CONOCIMIENTO", border=0, ln=True, fill=True)
-                    pdf.ln(1) # Respiro visual
+                    pdf.ln(1)
                     pdf.set_text_color(0, 0, 0)
                     pdf.set_font("Arial", "B", 8); pdf.cell(35, 6, "Relator / Piloto:", border=1); pdf.set_font("Arial", "", 8); pdf.cell(60, 6, tc_relator[:35], border=1)
                     pdf.set_font("Arial", "B", 8); pdf.cell(35, 6, "RUT Relator:", border=1); pdf.set_font("Arial", "", 8); pdf.cell(60, 6, tc_rut[:20], border=1, ln=True)
@@ -964,7 +1284,7 @@ elif st.session_state.current_page == 'hpt_nuevo':
                     pdf.ln(2)
                     pdf.set_fill_color(15, 55, 105); pdf.set_text_color(255, 255, 255)
                     pdf.set_font("Arial", "B", 9); pdf.cell(190, 6, "6. CUADRO DE FIRMAS RESPONSABLES", border=0, ln=True, fill=True)
-                    pdf.ln(1) # Respiro visual
+                    pdf.ln(1)
                     pdf.set_text_color(0, 0, 0)
                     pdf.cell(95, 22, "", border=1); pdf.cell(95, 22, "", border=1, ln=True)
                     id_firmas = uuid.uuid4().hex[:8]; f_serv = f"f_serv_{id_firmas}.jpg"; f_enc = f"f_encargado_{id_firmas}.jpg"
@@ -983,7 +1303,6 @@ elif st.session_state.current_page == 'hpt_nuevo':
                         
                         temp_img_path = f"temp_evidencia_{uuid.uuid4().hex[:6]}.jpg"
                         
-                        # OPTIMIZADOR DE RAM PARA EVIDENCIA HPT
                         bytes_optimizados_hpt = optimizar_imagen_ram(data['evidencia_puerto'])
                         
                         with open(temp_img_path, "wb") as f:
@@ -1066,7 +1385,6 @@ elif st.session_state.current_page == 'hpt_nuevo':
                     encoders.encode_base64(part); part.add_header("Content-Disposition", f"attachment; filename={archivo_pdf}"); msg.attach(part)
                     
                     try:
-                        # TIMEOUT DE 10 SEGUNDOS AÑADIDO PARA EVITAR CONGELAMIENTO EN LA NUBE
                         server = smtplib.SMTP(servidor_smtp, puerto_smtp, timeout=10)
                         server.starttls()
                         server.login(remitente, password)
@@ -1079,7 +1397,6 @@ elif st.session_state.current_page == 'hpt_nuevo':
                         imap.logout()
                     except Exception as e_mail:
                         st.warning("El PDF fue generado y respaldado en BD, pero hubo un retraso enviando el correo (El destinatario no lo recibió).")
-                        print(f"Error SMTP/IMAP: {e_mail}")
 
                     if os.path.exists(f_serv): os.remove(f_serv)
                     if os.path.exists(f_enc): os.remove(f_enc)
@@ -1218,7 +1535,7 @@ elif st.session_state.current_page == 'reporte_diario':
             
             pdf_rd.set_fill_color(15, 55, 105); pdf_rd.set_text_color(255, 255, 255)
             pdf_rd.set_font("Arial", "B", 10); pdf_rd.cell(190, 8, "1. DATOS GENERALES", border=0, ln=True, fill=True)
-            pdf_rd.ln(2) # Respiro visual
+            pdf_rd.ln(2) 
             pdf_rd.set_text_color(0, 0, 0)
             
             h_cell = 8
@@ -1235,12 +1552,12 @@ elif st.session_state.current_page == 'reporte_diario':
             pdf_rd.set_font("Arial", "B", 9); pdf_rd.cell(35, h_cell, "Correo Centro:", border=1); pdf_rd.set_font("Arial", "", 9); pdf_rd.cell(60, h_cell, correo_asignado_rd[:35], border=1, ln=True)
 
             pdf_rd.set_font("Arial", "B", 9); pdf_rd.cell(35, h_cell, "Area Asignada:", border=1); pdf_rd.set_font("Arial", "", 9); pdf_rd.cell(60, h_cell, area_rd, border=1)
-            pdf_rd.set_font("Arial", "B", 9); pdf_rd.cell(35, h_cell, "Cond. Puerto:", border=1); pdf_rd.set_font("Arial", "", 9); pdf.cell(60, h_cell, condicion_puerto_rd, border=1, ln=True)
+            pdf_rd.set_font("Arial", "B", 9); pdf_rd.cell(35, h_cell, "Cond. Puerto:", border=1); pdf_rd.set_font("Arial", "", 9); pdf_rd.cell(60, h_cell, condicion_puerto_rd, border=1, ln=True)
 
             pdf_rd.ln(8)
             pdf_rd.set_fill_color(15, 55, 105); pdf_rd.set_text_color(255, 255, 255)
             pdf_rd.set_font("Arial", "B", 10); pdf_rd.cell(190, 8, "2. DETALLE OPERATIVO", border=0, ln=True, fill=True)
-            pdf_rd.ln(2) # Respiro visual
+            pdf_rd.ln(2)
             pdf_rd.set_fill_color(240, 240, 240); pdf_rd.set_text_color(0, 0, 0); pdf_rd.set_font("Arial", "B", 9)
             pdf_rd.cell(190, 8, "Estructura Intervenida:", border=1, ln=True, fill=True)
             pdf_rd.set_font("Arial", "", 9); pdf_rd.cell(190, 8, str(jaula_rd), border=1, ln=True)
@@ -1248,7 +1565,7 @@ elif st.session_state.current_page == 'reporte_diario':
             pdf_rd.ln(4)
             pdf_rd.set_fill_color(15, 55, 105); pdf_rd.set_text_color(255, 255, 255)
             pdf_rd.set_font("Arial", "B", 10); pdf_rd.cell(190, 8, "Descripcion de la Tarea Realizada:", border=0, ln=True, fill=True)
-            pdf_rd.ln(2) # Respiro visual
+            pdf_rd.ln(2)
             pdf_rd.set_text_color(0, 0, 0); pdf_rd.set_font("Arial", "", 9)
             
             x_start = pdf_rd.get_x()
@@ -1271,7 +1588,7 @@ elif st.session_state.current_page == 'reporte_diario':
             if pdf_rd.get_y() > 220: pdf_rd.add_page()
             pdf_rd.set_fill_color(15, 55, 105); pdf_rd.set_text_color(255, 255, 255)
             pdf_rd.set_font("Arial", "B", 10); pdf_rd.cell(190, 8, "3. CUADRO DE FIRMAS RESPONSABLES", border=0, ln=True, fill=True)
-            pdf_rd.ln(2) # Respiro visual
+            pdf_rd.ln(2)
             pdf_rd.set_text_color(0, 0, 0)
             pdf_rd.cell(95, 25, "", border=1); pdf_rd.cell(95, 25, "", border=1, ln=True)
             id_firmas_rd = uuid.uuid4().hex[:8]; f_pil_rd = f"f_p_rd_{id_firmas_rd}.jpg"; f_enc_rd = f"f_e_rd_{id_firmas_rd}.jpg"
@@ -1290,7 +1607,6 @@ elif st.session_state.current_page == 'reporte_diario':
                 
                 temp_img_path = f"temp_evidencia_rd_{uuid.uuid4().hex[:6]}.jpg"
                 
-                # OPTIMIZADOR DE RAM PARA EVIDENCIA REPORTE DIARIO
                 bytes_optimizados_rd = optimizar_imagen_ram(evidencia_img_rd.getvalue())
                 
                 with open(temp_img_path, "wb") as f: 
@@ -1396,16 +1712,13 @@ elif st.session_state.current_page == 'entrega_turno':
     rov_sby_id = [r for r in opciones_rov if r != st.session_state.rov_activo]
     rov_sby = st.session_state.db_rovs[rov_sby_id[0]] if rov_sby_id else None
 
-    # MÓDULO DE ACTUALIZACIÓN DE MANTENCIÓN POR PARTE DEL PILOTO
     col_r1, col_r2 = st.columns(2)
     with col_r1:
         st.markdown(f"🟢 **Equipo en USO actual:**")
         st.markdown(f"**{rov_act['nombre']}** N° Serie: {rov_act['serie_rov']} <br> Controlador N° Serie: {rov_act['serie_ctrl']}", unsafe_allow_html=True)
-        # El piloto puede modificar la fecha de mantención
         nueva_fecha_act = st.date_input(f"Última mantención ({rov_act['nombre']})", value=rov_act['mantencion'], key="mant_act")
         if nueva_fecha_act != rov_act['mantencion']:
             st.session_state.db_rovs[st.session_state.rov_activo]['mantencion'] = nueva_fecha_act
-            # Guardar en el historial
             st.session_state.historial_mantenciones.append({
                 "fecha_registro": datetime.date.today(),
                 "piloto": st.session_state.current_user,
@@ -1448,40 +1761,20 @@ elif st.session_state.current_page == 'entrega_turno':
 
     st.markdown("---"); st.header("4. Inventario de Terreno")
     herramientas_base = {
-        "Cuchillo de maniobra con funda (Bahco)": 1, 
-        "Cuchillo de maniobra sin funda (Bahco)": 1, 
-        "Araña de recuperación de acero inoxidable": 1, 
-        "Juego de llaves Allen": 1, 
-        "Pelacables": 1, 
-        "Alicate de corte diagonal": 1, 
-        "Alicate de punta fina (mangos rojo/azul)": 1, 
-        "Alicate para anillos de retención (circlips)": 1, 
-        "Alicate universal": 1, 
-        "Alicate de punta fina pequeño": 1, 
-        "Destornilladores": 6,
-        "Alicate de presión (caimán)": 1,
-        "Imán de recuperación (con cáncamo)": 1,
-        "Sierra de cuerda": 1
+        "Cuchillo de maniobra con funda (Bahco)": 1, "Cuchillo de maniobra sin funda (Bahco)": 1, 
+        "Araña de recuperación de acero inoxidable": 1, "Juego de llaves Allen": 1, 
+        "Pelacables": 1, "Alicate de corte diagonal": 1, "Alicate de punta fina (mangos rojo/azul)": 1, 
+        "Alicate para anillos de retención (circlips)": 1, "Alicate universal": 1, "Alicate de punta fina pequeño": 1, 
+        "Destornilladores": 6, "Alicate de presión (caimán)": 1, "Imán de recuperación (con cáncamo)": 1, "Sierra de cuerda": 1
     }
     materiales_base = {
-        "Frasco de vaselina": 1, 
-        "Tubos de grasa dieléctrica (Loctite)": 3, 
-        "Paquete de hisopos": 1, 
-        "Tapones o conectores cilíndricos negros": 3, 
-        "Adhesivo industrial B-7000": 1, 
-        "Lata de lubricante penetrante (Afloja Todo)": 1, 
-        "WD-40": 1, 
-        "Limpia contacto": 1, 
-        "Tapones para puerto de carga": 2, 
-        "Tapón o cubierta cuadrada pequeña": 1, 
-        "Protectores de sensor": 3, 
-        "Rollo de cinta de empalme (Splicing tape)": 1, 
-        "Cartucho de cuchillas de repuesto": 1, 
-        "Repuestos de brazo manipulador grabber": 4,
-        "Cajas con cotonitos": 1,
-        "Cinta aislante eléctrica": 1,
-        "Tubo de pegamento instantáneo (super glue)": 1,
-        "Caja de hojas de repuesto (bisturí Bauker)": 1,
+        "Frasco de vaselina": 1, "Tubos de grasa dieléctrica (Loctite)": 3, "Paquete de hisopos": 1, 
+        "Tapones o conectores cilíndricos negros": 3, "Adhesivo industrial B-7000": 1, 
+        "Lata de lubricante penetrante (Afloja Todo)": 1, "WD-40": 1, "Limpia contacto": 1, 
+        "Tapones para puerto de carga": 2, "Tapón o cubierta cuadrada pequeña": 1, "Protectores de sensor": 3, 
+        "Rollo de cinta de empalme (Splicing tape)": 1, "Cartucho de cuchillas de repuesto": 1, 
+        "Repuestos de brazo manipulador grabber": 4, "Cajas con cotonitos": 1, "Cinta aislante eléctrica": 1,
+        "Tubo de pegamento instantáneo (super glue)": 1, "Caja de hojas de repuesto (bisturí Bauker)": 1,
         "Piezas de repuesto grabber (negras)": 4
     }
 
@@ -1628,7 +1921,6 @@ elif st.session_state.current_page == 'entrega_turno':
                 encoders.encode_base64(part); part.add_header("Content-Disposition", f"attachment; filename={archivo_pdf_et}"); msg.attach(part)
                 
                 try:
-                    # 1. ENVÍO DE CORREO (Aumentamos tiempo a 15 seg para el plan gratuito)
                     server = smtplib.SMTP(servidor_smtp, puerto_smtp, timeout=15)
                     server.starttls()
                     server.login(remitente, password)
@@ -1641,7 +1933,6 @@ elif st.session_state.current_page == 'entrega_turno':
                     
                 if correo_enviado:
                     try:
-                        # 2. SINCRONIZACIÓN IMAP AISLADA (Si falla por el servidor gratis, no bloquea el aviso de éxito)
                         import imaplib
                         imap = imaplib.IMAP4_SSL(servidor_smtp, 993, timeout=5)
                         imap.login(remitente, password)

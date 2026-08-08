@@ -216,6 +216,7 @@ def obtener_ruta_logo():
     return None
 
 def optimizar_imagen_ram(file_bytes_or_path, max_dim=800):
+    """Comprime imágenes pesadas en memoria RAM para evitar que el servidor colapse (OOM)."""
     try:
         if isinstance(file_bytes_or_path, bytes):
             img = Image.open(io.BytesIO(file_bytes_or_path))
@@ -249,65 +250,105 @@ def procesar_firma(canvas_obj, filename):
     return False
 
 def generar_pdf_consolidado(datos, anomalias, logo_filename, rov_cover, nombre_archivo):
-    """Genera el Informe Consolidado unificado para inspecciones de ROV."""
+    """Genera el Informe Consolidado replicando el diseño visual de referencia."""
     pdf = FPDF(orientation='P', unit='mm', format='A4')
     pdf.set_auto_page_break(auto=True, margin=15)
     
-    # 1. Portada
+    # ---------------------------------------------------------
+    # PÁGINA 1: PORTADA
+    # ---------------------------------------------------------
     pdf.add_page()
-    if logo_filename and os.path.exists(logo_filename):
-        try:
-            pdf.image(logo_filename, x=15, y=15, w=40)
-        except: pass
-        
-    pdf.set_y(45)
-    pdf.set_font("Arial", 'B', 22)
-    pdf.set_text_color(15, 55, 105)
-    pdf.cell(0, 15, "INFORME DE INSPECCION SUBMARINA", border=0, ln=True, align='C')
-    pdf.set_font("Arial", 'I', 14)
-    pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 10, "CONSOLIDADO DE HALLAZGOS Y REPARACIONES", border=0, ln=True, align='C')
+    
+    # Header simulado (Logos)
+    pdf.set_font("Arial", 'B', 16)
+    pdf.set_text_color(15, 55, 105) # Azul oscuro
+    pdf.cell(60, 10, "TECHTRIDENT", border=0, align='L')
+    pdf.cell(70, 10, "ÁREA ROBÓTICA", border=0, align='C')
+    pdf.set_text_color(0, 102, 204) # Azul claro
+    cliente_str = str(datos.get("cliente", "CLIENTE")).upper()
+    pdf.cell(60, 10, cliente_str[:20], border=0, align='R', ln=True)
+    pdf.line(10, 22, 200, 22)
     pdf.ln(10)
     
+    # Imagen Central del ROV
     if rov_cover and os.path.exists(rov_cover):
         try:
-            pdf.image(rov_cover, x=35, y=pdf.get_y(), w=140)
-            pdf.set_y(pdf.get_y() + 100)
+            pdf.image(rov_cover, x=25, y=30, w=160)
+            pdf.set_y(120) # Bajar el cursor después de la imagen
         except:
-            pdf.ln(100)
+            pdf.set_y(60)
     else:
-        pdf.ln(80)
+        pdf.set_y(60)
         
-    pdf.set_fill_color(15, 55, 105)
-    pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Arial", 'B', 12)
-    pdf.cell(180, 10, "  DATOS GENERALES DE LA INSPECCION", border=0, ln=True, fill=True)
-    
+    # Títulos Principales
+    pdf.set_font("Arial", 'B', 24)
     pdf.set_text_color(0, 0, 0)
-    h_c = 8
+    pdf.cell(0, 10, "INFORME DIARIO", border=0, ln=True, align='C')
+    pdf.set_font("Arial", 'B', 18)
+    pdf.cell(0, 10, "INSPECCIÓN ROBÓTICA SUBMARINA", border=0, ln=True, align='C')
+    centro_str = str(datos.get("centro", "CENTRO")).upper()
+    pdf.cell(0, 10, f"CENTRO {centro_str}", border=0, ln=True, align='C')
+    pdf.ln(10)
     
-    def add_row(l1, v1, l2, v2):
+    # Tabla de Datos (Diseño de Referencia + Datos de Elías)
+    pdf.set_left_margin(25)
+    pdf.set_right_margin(25)
+    pdf.set_x(25)
+    
+    def add_cover_row(label, value):
         pdf.set_font("Arial", 'B', 10)
-        pdf.cell(40, h_c, l1, border=1)
+        pdf.set_fill_color(240, 240, 240)
+        pdf.cell(70, 8, f"  {label}", border=1, fill=True)
         pdf.set_font("Arial", '', 10)
-        pdf.cell(50, h_c, str(v1)[:30], border=1)
-        pdf.set_font("Arial", 'B', 10)
-        pdf.cell(40, h_c, l2, border=1)
-        pdf.set_font("Arial", '', 10)
-        pdf.cell(50, h_c, str(v2)[:30], border=1, ln=True)
+        pdf.cell(90, 8, f"  {str(value)[:45]}", border=1, ln=True)
 
-    add_row("Cliente:", datos.get("cliente", ""), "Centro:", datos.get("centro", ""))
-    add_row("Fecha:", datos.get("fecha", ""), "Encargado:", datos.get("encargado", ""))
-    add_row("Piloto ROV:", datos.get("piloto", ""), "Equipo ROV:", datos.get("equipo", ""))
+    add_cover_row("CLIENTE", datos.get("cliente", ""))
+    add_cover_row("CENTRO", datos.get("centro", ""))
+    add_cover_row("ENCARGADO DE CENTRO", datos.get("encargado", ""))
+    add_cover_row("FECHA", datos.get("fecha", ""))
+    add_cover_row("PILOTO ROV", datos.get("piloto", ""))
+    add_cover_row("DISPONIBILIDAD", datos.get("disponibilidad", "Disponible"))
+    add_cover_row("EQUIPO ROV", datos.get("equipo", ""))
     
-    # 2. Planimetria
+    # Agrupamos las métricas extra en un solo bloque para ahorrar espacio en portada
+    metricas_str = f"Trabajados: {datos.get('dias_trabajados', 1)} | P. Cerrado: {datos.get('dias_cerrado', 0)} | Fallas: {datos.get('dias_fallas', 0)}"
+    add_cover_row("DÍAS OPERATIVOS", metricas_str)
+    
+    equipos_str = f"Backup: {datos.get('backup', 'SI')} | Grabber: {datos.get('graber', 'SI')}"
+    add_cover_row("ESTADO DE EQUIPOS", equipos_str)
+    
+    # Footer Portada
+    pdf.set_y(-25)
+    pdf.set_left_margin(10)
+    pdf.set_right_margin(10)
+    pdf.set_font("Arial", 'B', 8)
+    pdf.set_text_color(15, 55, 105)
+    pdf.cell(0, 5, "TECHTRIDENT ÁREA ROBÓTICA - CONTACTO@TECHTRIDENT.CL", align='C', ln=True)
+
+    # ---------------------------------------------------------
+    # PÁGINA 2: PLANIMETRÍA Y ACTIVIDADES
+    # ---------------------------------------------------------
+    pdf.add_page()
+    pdf.set_font("Arial", 'B', 16)
+    pdf.set_text_color(0, 0, 0)
+    pdf.cell(0, 10, "ESPECIFICACIÓN DEL CENTRO E INSPECCIÓN", border=0, ln=True, align='C')
+    pdf.ln(5)
+    
+    pdf.set_font("Arial", 'B', 11)
+    pdf.cell(0, 6, "ACTIVIDADES REALIZADAS:", ln=True)
+    pdf.set_font("Arial", '', 10)
+    act_am = str(datos.get("actividad_am", "")).encode('latin-1', 'replace').decode('latin-1')
+    act_pm = str(datos.get("actividad_pm", "")).encode('latin-1', 'replace').decode('latin-1')
+    obs = str(datos.get("observaciones", "")).encode('latin-1', 'replace').decode('latin-1')
+    
+    pdf.multi_cell(0, 5, f"AM: {act_am}")
+    pdf.multi_cell(0, 5, f"PM: {act_pm}")
+    pdf.ln(3)
+    pdf.multi_cell(0, 5, f"Observaciones de la jornada: {obs}")
+    pdf.ln(10)
+    
+    # Renderizar Planimetría (Esquema del centro)
     if datos.get("planimetria"):
-        pdf.add_page()
-        pdf.set_font("Arial", 'B', 14)
-        pdf.set_fill_color(15, 55, 105)
-        pdf.set_text_color(255, 255, 255)
-        pdf.cell(0, 10, "  1. ESQUEMA DEL CENTRO DE CULTIVO", border=0, ln=True, fill=True)
-        pdf.ln(5)
         try:
             temp_path = f"temp_pl_{uuid.uuid4().hex[:6]}.jpg"
             bytes_opt = optimizar_imagen_ram(datos["planimetria"], max_dim=1200)
@@ -315,27 +356,23 @@ def generar_pdf_consolidado(datos, anomalias, logo_filename, rov_cover, nombre_a
             with Image.open(temp_path) as pil_img:
                 w, h = pil_img.size
                 aspect = h / w
-                w_mm = 180
+                w_mm = 170
                 h_mm = w_mm * aspect
-                if h_mm > 220:
-                    h_mm = 220
+                if h_mm > 160: # Límite de alto
+                    h_mm = 160
                     w_mm = h_mm / aspect
             pdf.image(temp_path, x=(210-w_mm)/2, y=pdf.get_y(), w=w_mm, h=h_mm)
             pdf.set_y(pdf.get_y() + h_mm + 10)
             os.remove(temp_path)
         except Exception as e:
-            pdf.set_text_color(0,0,0)
-            pdf.cell(0, 10, f"No se pudo procesar la planimetria.", ln=True)
+            pdf.set_font("Arial", 'I', 10)
+            pdf.cell(0, 10, "(No se adjuntó esquema válido o no se pudo procesar)", ln=True, align='C')
 
-    # 3. Cards
+    # ---------------------------------------------------------
+    # PÁGINAS 3+: GRILLA DE FOTOGRAFÍAS (Por Jaula)
+    # ---------------------------------------------------------
     if anomalias:
-        pdf.add_page()
-        pdf.set_font("Arial", 'B', 14)
-        pdf.set_fill_color(15, 55, 105)
-        pdf.set_text_color(255, 255, 255)
-        pdf.cell(0, 10, "  2. REPORTE FOTOGRAFICO POR JAULA", border=0, ln=True, fill=True)
-        pdf.ln(5)
-        
+        # Agrupar anomalías por jaula
         anomalias_por_jaula = {}
         for a in anomalias:
             j = a.get('jaula', 'N/A')
@@ -344,106 +381,152 @@ def generar_pdf_consolidado(datos, anomalias, logo_filename, rov_cover, nombre_a
             anomalias_por_jaula[j].append(a)
             
         for jaula, lista_anomalias in anomalias_por_jaula.items():
-            pdf.set_font("Arial", 'B', 12)
-            pdf.set_text_color(15, 55, 105)
-            pdf.cell(0, 8, f"Jaula Operada: {jaula}", border='B', ln=True)
-            pdf.ln(4)
+            pdf.add_page()
+            pdf.set_font("Arial", 'B', 16)
+            pdf.cell(0, 10, f"IMÁGENES DE INSPECCIÓN JAULA {jaula}", border=0, ln=True, align='C')
+            pdf.ln(5)
+            
+            # Layout de grilla: 2 imágenes por fila (Antes / Después)
+            col_width = 85
+            x_start = 15
             
             for idx, anomalia in enumerate(lista_anomalias):
-                if pdf.get_y() > 200:
+                if pdf.get_y() > 220:
                     pdf.add_page()
-                    pdf.set_font("Arial", 'B', 12)
-                    pdf.set_text_color(15, 55, 105)
-                    pdf.cell(0, 8, f"Jaula Operada: {jaula} (Continuacion)", border='B', ln=True)
-                    pdf.ln(4)
+                    pdf.set_font("Arial", 'B', 16)
+                    pdf.cell(0, 10, f"IMÁGENES DE INSPECCIÓN JAULA {jaula} (Cont.)", border=0, ln=True, align='C')
+                    pdf.ln(5)
                     
-                y_start = pdf.get_y()
-                pdf.set_fill_color(240, 245, 250)
-                pdf.rect(15, y_start, 180, 85, 'F')
+                y_base = pdf.get_y()
                 
-                pdf.set_y(y_start + 2)
-                pdf.set_font("Arial", 'B', 9)
-                pdf.set_text_color(0, 0, 0)
-                desc_safe = str(anomalia.get('descripcion','')).encode('latin-1', 'replace').decode('latin-1')
-                pdf.cell(180, 5, f"  Hallazgo {idx+1}: {desc_safe} | Red: {anomalia.get('tipo_red','')}", ln=True)
-                pdf.set_font("Arial", '', 8)
-                pdf.cell(180, 5, f"  Ubicacion: {anomalia.get('ubicacion','')} | Profundidad: {anomalia.get('profundidad','')}m | Estado: {anomalia.get('estado','')}", ln=True)
-                
-                y_img = pdf.get_y() + 2
-                
-                def render_foto(foto_data, title, x_pos):
+                # Helper para dibujar una "Card" fotográfica
+                def draw_photo_card(foto_data, x_pos, is_reparada=False):
+                    pdf.set_xy(x_pos, y_base)
+                    # Dibujar marco gris
+                    pdf.set_draw_color(200, 200, 200)
+                    pdf.rect(x_pos, y_base, col_width, 65)
+                    
                     if foto_data:
                         try:
                             temp = f"t_foto_{uuid.uuid4().hex[:6]}.jpg"
                             with open(temp, "wb") as f: f.write(optimizar_imagen_ram(foto_data, 600))
                             
-                            pdf.set_font("Arial", 'B', 8)
-                            pdf.set_xy(x_pos, y_img)
-                            pdf.cell(85, 4, title, align='C', ln=True)
-                            
                             with Image.open(temp) as img:
                                 asp = img.height / img.width
-                                w = 80
+                                w = col_width - 4
                                 h = w * asp
-                                if h > 55:
-                                    h = 55
+                                if h > 45:
+                                    h = 45
                                     w = h / asp
-                            pdf.image(temp, x=x_pos + (85-w)/2, y=y_img+4, w=w, h=h)
+                            # Centrar imagen en su caja
+                            pdf.image(temp, x=x_pos + 2 + (col_width-4-w)/2, y=y_base + 2, w=w, h=h)
                             os.remove(temp)
                         except: pass
-                
-                render_foto(anomalia.get('foto_rotura'), "ANTES (ROTURA)", 15)
-                render_foto(anomalia.get('foto_reparacion'), "DESPUES (REPARACION)", 110)
-                
-                pdf.set_y(y_start + 88)
+                    
+                    # Textos descriptivos debajo de la foto
+                    pdf.set_xy(x_pos + 2, y_base + 48)
+                    pdf.set_font("Arial", '', 8)
+                    pdf.set_text_color(0, 0, 0)
+                    
+                    desc = anomalia.get('descripcion','')
+                    red = anomalia.get('tipo_red','')
+                    ubic = anomalia.get('ubicacion','')
+                    prof = anomalia.get('profundidad','')
+                    
+                    texto_desc = f"{desc} Red {red} {jaula}\n{ubic} {prof} metros."
+                    texto_desc = texto_desc.encode('latin-1', 'replace').decode('latin-1')
+                    pdf.multi_cell(col_width - 4, 4, texto_desc, align='C')
+                    
+                    # Banner de estado
+                    estado = anomalia.get('estado', '').upper()
+                    if is_reparada or estado == 'REPARADA':
+                        pdf.set_text_color(0, 128, 0) # Verde
+                    else:
+                        pdf.set_text_color(200, 0, 0) # Rojo
+                    
+                    pdf.set_font("Arial", 'B', 9)
+                    pdf.set_xy(x_pos, y_base + 58)
+                    pdf.cell(col_width, 5, estado, align='C')
+                    pdf.set_text_color(0, 0, 0)
 
-    # 4. Matriz de Resultados (Landscape)
+                # Dibuja la foto de rotura a la izquierda
+                draw_photo_card(anomalia.get('foto_rotura'), x_start)
+                # Dibuja la foto de reparación a la derecha
+                draw_photo_card(anomalia.get('foto_reparacion'), x_start + col_width + 10, is_reparada=True)
+                
+                pdf.set_y(y_base + 70) # Bajar a la siguiente fila de fotos
+
+    # ---------------------------------------------------------
+    # PÁGINA FINAL: MATRIZ DE RESULTADOS (Landscape)
+    # ---------------------------------------------------------
     pdf.add_page(orientation='L')
-    pdf.set_font("Arial", 'B', 14)
-    pdf.set_fill_color(15, 55, 105)
-    pdf.set_text_color(255, 255, 255)
-    pdf.cell(0, 10, "  3. RESULTADOS DE LA INSPECCION (MATRIZ)", border=0, ln=True, fill=True)
-    pdf.ln(5)
+    pdf.set_font("Arial", 'B', 16)
+    pdf.set_text_color(0, 0, 0)
+    pdf.cell(0, 10, "RESULTADOS DE LA INSPECCIÓN", border=0, ln=True, align='L')
+    pdf.ln(2)
+    
+    # Calcular semana actual
+    try:
+        fecha_obj = datos.get("fecha")
+        if isinstance(fecha_obj, str):
+            fecha_obj = datetime.datetime.strptime(fecha_obj, "%Y-%m-%d").date()
+        semana = fecha_obj.isocalendar()[1]
+    except:
+        semana = "-"
     
     cols = [
-        ("Nro", 10), ("Fecha", 25), ("Jaula", 20), ("Tipo Red", 25), 
-        ("Anomalia / Hallazgo", 70), ("Ubicacion", 30), ("Prof.", 15), ("Estado", 25), ("Servicio", 50)
+        ("N°", 8), ("Fecha", 22), ("Semana", 18), ("Jaula", 15), ("Centro", 30), 
+        ("Tipo Red", 20), ("Anomalia / Hallazgo", 60), ("Ubicación", 30), 
+        ("Profundidad", 25), ("Estado", 22), ("Servicio", 25)
     ]
+    
     pdf.set_font("Arial", 'B', 9)
-    pdf.set_fill_color(230, 230, 230)
+    pdf.set_fill_color(220, 220, 220)
     pdf.set_text_color(0, 0, 0)
+    
+    # Header de la tabla
     for col_name, width in cols:
         pdf.cell(width, 8, col_name, border=1, fill=True, align='C')
     pdf.ln()
     
+    # Filas de la tabla
     pdf.set_font("Arial", '', 8)
     for i, a in enumerate(anomalias):
-        if a['estado'].lower() == 'reparada':
+        estado = a.get('estado', '')
+        
+        desc_safe = str(a.get('descripcion','')).replace('\n', ' ')[:40].encode('latin-1', 'replace').decode('latin-1')
+        centro_safe = str(datos.get('centro', ''))[:15].encode('latin-1', 'replace').decode('latin-1')
+        ubic_safe = str(a.get('ubicacion', ''))[:15].encode('latin-1', 'replace').decode('latin-1')
+        
+        pdf.cell(cols[0][1], 8, str(i+1), border=1, align='C')
+        pdf.cell(cols[1][1], 8, str(datos.get('fecha', '')), border=1, align='C')
+        pdf.cell(cols[2][1], 8, str(semana), border=1, align='C')
+        pdf.cell(cols[3][1], 8, str(a.get('jaula', ''))[:8], border=1, align='C')
+        pdf.cell(cols[4][1], 8, centro_safe, border=1, align='C')
+        pdf.cell(cols[5][1], 8, str(a.get('tipo_red', ''))[:10], border=1, align='C')
+        pdf.cell(cols[6][1], 8, desc_safe, border=1)
+        pdf.cell(cols[7][1], 8, ubic_safe, border=1, align='C')
+        pdf.cell(cols[8][1], 8, f"{a.get('profundidad', '')}m", border=1, align='C')
+        
+        # Color del estado
+        if estado.lower() == 'reparada':
             pdf.set_text_color(0, 128, 0) 
         else:
             pdf.set_text_color(200, 0, 0) 
             
-        desc_safe = str(a.get('descripcion','')).replace('\n', ' ')[:45].encode('latin-1', 'replace').decode('latin-1')
-        
-        pdf.cell(cols[0][1], 8, str(i+1), border=1, align='C')
-        pdf.cell(cols[1][1], 8, str(datos.get('fecha', '')), border=1, align='C')
-        pdf.cell(cols[2][1], 8, str(a.get('jaula', ''))[:10], border=1, align='C')
-        pdf.cell(cols[3][1], 8, str(a.get('tipo_red', ''))[:15], border=1, align='C')
-        pdf.cell(cols[4][1], 8, desc_safe, border=1)
-        pdf.cell(cols[5][1], 8, str(a.get('ubicacion', ''))[:18], border=1, align='C')
-        pdf.cell(cols[6][1], 8, str(a.get('profundidad', '')), border=1, align='C')
-        pdf.cell(cols[7][1], 8, str(a.get('estado', '')), border=1, align='C')
+        pdf.cell(cols[9][1], 8, estado, border=1, align='C')
         pdf.set_text_color(0, 0, 0)
-        pdf.cell(cols[8][1], 8, "Inspeccion ROV", border=1, align='C')
+        pdf.cell(cols[10][1], 8, "Inspección", border=1, align='C')
         pdf.ln()
 
+    # Bloque final de observaciones debajo de la matriz
     if datos.get("observaciones"):
-        pdf.ln(10)
+        pdf.ln(5)
         pdf.set_font("Arial", 'B', 10)
-        pdf.cell(0, 6, "OBSERVACIONES FINALES:", ln=True)
+        pdf.cell(0, 6, "Observaciones Generales:", ln=True)
         pdf.set_font("Arial", '', 9)
         obs_safe = str(datos.get("observaciones")).encode('latin-1', 'replace').decode('latin-1')
-        pdf.multi_cell(0, 6, obs_safe)
+        pdf.multi_cell(0, 5, f"*{obs_safe}")
 
     pdf.output(nombre_archivo)
     return nombre_archivo
@@ -846,7 +929,234 @@ elif st.session_state.current_page == 'main_menu':
 
 elif st.session_state.current_page == 'informe_consolidado':
     st.button("⬅️ Volver al Menú Principal", on_click=set_page, args=('main_menu',))
-    st.markdown("<h1 style='text-align: center;'>📑 Informe Consolidado Operativo</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center;'>📑 Informe Consolidado Operativo (PDF Detallado)</h1>", unsafe_allow_html=True)
+    st.info("Este módulo genera el archivo PDF formal con la planimetría y el registro fotográfico (estilo InDesign), además del Excel semanal de respaldo.")
+    st.divider()
+
+    # Inicializar estado para el Excel Semanal si no existe
+    if 'historial_excel_semanal' not in st.session_state:
+        st.session_state.historial_excel_semanal = pd.DataFrame(columns=[
+            "Fecha", "Semana", "Jaula", "Centro", "Tipo Red", "Anomalia", "Ubicacion", "Profundidad", "Estado"
+        ])
+
+    tab1, tab2, tab3 = st.tabs(["1️⃣ Contexto y Operativa", "2️⃣ Registro de Anomalías (Fotos)", "3️⃣ Compilar PDF y Texto Correo"])
+
+    with tab1:
+        st.subheader("Datos de la Inspección")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            ic_cliente = st.selectbox("Empresa / Cliente", ["Salmones Blumar", "Salmones Blumar Magallanes", "Otra Empresa"])
+            opciones_centros = list(st.session_state.db_centros_areas.keys())
+            ic_centro = st.selectbox("Centro de Cultivo", opciones_centros)
+            ic_fecha = st.date_input("Fecha de Inspección", value=datetime.date.today())
+        with c2:
+            ic_encargado = st.text_input("Asistente/Encargado de Centro", value=st.session_state.ic_data.get("encargado", ""))
+            ic_piloto = st.text_input("Piloto ROV", value=st.session_state.current_user)
+            ic_equipo = st.selectbox("Equipo ROV Utilizado", ["Deep Trekker DTG3", "MC Petrohue", "Chasing Promax", "Fifish vs xpert"])
+        with c3:
+            ic_disponibilidad = st.selectbox("Disponibilidad", ["Disponible", "Enfermo", "Licencia Médica", "No disponible"])
+            ic_ingreso = st.date_input("Fecha último ingreso")
+            ic_proximo = st.date_input("Fecha próximo ingreso")
+            
+        c4, c5, c6 = st.columns(3)
+        with c4:
+            ic_dias_cerrado = st.number_input("Días puerto cerrado", min_value=0, value=0)
+            ic_dias_fallas = st.number_input("Días fallas ROV", min_value=0, value=0)
+        with c5:
+            ic_backup = st.radio("Backup Operativo", ["SI", "NO"], horizontal=True)
+            ic_graber = st.radio("Graber Operativo", ["SI", "NO"], horizontal=True)
+        with c6:
+            ic_planimetria = st.file_uploader("📸 Subir Esquema/Planimetría del Centro", type=['jpg', 'jpeg', 'png'])
+
+        st.subheader("Actividades Diarias")
+        col_act1, col_act2 = st.columns(2)
+        with col_act1:
+            ic_act_am = st.text_area("Actividad AM", placeholder="Ej: INSPECCIÓN PECERA J101...")
+        with col_act2:
+            ic_act_pm = st.text_area("Actividad PM", placeholder="Ej: EXTRACCIÓN MORTALIDAD J101...")
+            
+        if st.button("Guardar Datos Generales", type="primary"):
+            dias_trabajados = (datetime.date.today() - ic_ingreso).days + 1
+            if dias_trabajados < 1: dias_trabajados = 1
+                
+            st.session_state.ic_data.update({
+                "cliente": ic_cliente, "centro": ic_centro, "fecha": ic_fecha,
+                "encargado": ic_encargado, "piloto": ic_piloto, "equipo": ic_equipo,
+                "disponibilidad": ic_disponibilidad, "ingreso": ic_ingreso, "proximo": ic_proximo,
+                "dias_trabajados": dias_trabajados, "dias_cerrado": ic_dias_cerrado, "dias_fallas": ic_dias_fallas,
+                "backup": ic_backup, "graber": ic_graber, "actividad_am": ic_act_am, "actividad_pm": ic_act_pm,
+                "planimetria": ic_planimetria.getvalue() if ic_planimetria else st.session_state.ic_data.get("planimetria")
+            })
+            st.success("✅ Datos operativos guardados exitosamente. Pasa a la pestaña 2.")
+
+    with tab2:
+        st.subheader("Registro Dinámico de Roturas/Anomalías")
+        st.write("Agrega aquí cada hallazgo para armar la matriz y la grilla de fotos automáticamente.")
+        with st.form("form_anomalia", clear_on_submit=True):
+            col_a1, col_a2 = st.columns(2)
+            with col_a1:
+                jaula = st.text_input("N° de Jaula (Ej: 101, 102)")
+                tipo_red = st.selectbox("Tipo de Red", ["Lobera", "Pecera", "Pajarera"])
+                desc = st.text_area("Descripción de la Anomalía (Ej: Rotura 2x1 cuadros)")
+            with col_a2:
+                ubicacion = st.text_input("Ubicación (Ej: Lateral Este, Fondo, Cabecera)")
+                profundidad = st.number_input("Profundidad (metros)", min_value=0.0, step=0.1)
+                estado = st.selectbox("Estado", ["Reparada", "Pendiente"])
+                
+            st.markdown("**Evidencia Fotográfica**")
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                foto_antes = st.file_uploader("Foto Antes (Rotura/Hallazgo)", type=['jpg', 'jpeg', 'png'], key="ic_f1")
+            with col_f2:
+                foto_despues = st.file_uploader("Foto Después (Reparación)", type=['jpg', 'jpeg', 'png'], key="ic_f2")
+                
+            if st.form_submit_button("➕ Agregar a la Matriz", use_container_width=True):
+                if not jaula or not desc:
+                    st.error("⚠️ La Jaula y la Descripción son obligatorias.")
+                else:
+                    nueva_anomalia = {
+                        "id": str(uuid.uuid4())[:6], "jaula": jaula, "tipo_red": tipo_red,
+                        "descripcion": desc, "ubicacion": ubicacion, "profundidad": profundidad,
+                        "estado": estado, "foto_rotura": foto_antes.getvalue() if foto_antes else None,
+                        "foto_reparacion": foto_despues.getvalue() if foto_despues else None
+                    }
+                    st.session_state.anomalias.append(nueva_anomalia)
+                    
+                    # Añadir silenciosamente al DataFrame de Excel Semanal
+                    semana_actual = datetime.date.today().isocalendar()[1]
+                    nueva_fila = pd.DataFrame([{
+                        "Fecha": datetime.date.today(), "Semana": semana_actual, "Jaula": jaula,
+                        "Centro": st.session_state.ic_data.get("centro", "N/A"), "Tipo Red": tipo_red,
+                        "Anomalia": desc, "Ubicacion": ubicacion, "Profundidad": profundidad, "Estado": estado
+                    }])
+                    st.session_state.historial_excel_semanal = pd.concat([st.session_state.historial_excel_semanal, nueva_fila], ignore_index=True)
+                    
+                    st.success(f"✅ Registrado exitosamente en Jaula {jaula}.")
+        
+        st.markdown("---")
+        st.markdown(f"### Anomalías en Memoria para el Reporte de Hoy ({len(st.session_state.anomalias)})")
+        if not st.session_state.anomalias:
+            st.info("No hay anomalías registradas hoy.")
+        else:
+            for i, an in enumerate(st.session_state.anomalias):
+                with st.container(border=True):
+                    c_an1, c_an2 = st.columns([5, 1])
+                    with c_an1:
+                        st.markdown(f"**Jaula {an['jaula']} ({an['tipo_red']}) - {an['estado']}**")
+                        st.write(f"{an['descripcion']} | Prof: {an['profundidad']}m | Ubicación: {an['ubicacion']}")
+                    with c_an2:
+                        if st.button("❌", key=f"del_{an['id']}", use_container_width=True):
+                            st.session_state.anomalias.pop(i)
+                            st.rerun()
+
+    with tab3:
+        st.subheader("Paso Final: Compilación")
+        ic_observaciones = st.text_area("Observaciones Generales de la Inspección", placeholder="Resumen final para la matriz y el correo...", height=100)
+        
+        col_gen1, col_gen2 = st.columns(2)
+        with col_gen1:
+            if st.button("📥 1. GENERAR INFORME DETALLADO (PDF)", type="primary", use_container_width=True):
+                if not st.session_state.ic_data:
+                    st.error("⚠️ Guarde los datos de contexto en la Pestaña 1 primero.")
+                else:
+                    st.session_state.ic_data["observaciones"] = ic_observaciones
+                    with st.spinner("Compilando arquitectura del PDF estilo InDesign..."):
+                        nombre_pdf = f"INFORME_DIARIO_{st.session_state.ic_data.get('centro','').replace(' ', '')}_{st.session_state.ic_data.get('fecha')}.pdf"
+                        try:
+                            logo_path = obtener_ruta_logo()
+                            # Asumimos que rov_cover.jpg se subirá a la carpeta raíz del proyecto en Railway
+                            rov_cover = "rov_cover.jpg" if os.path.exists("rov_cover.jpg") else None
+                            
+                            pdf_generado = generar_pdf_consolidado(
+                                datos=st.session_state.ic_data, 
+                                anomalias=st.session_state.anomalias, 
+                                logo_filename=logo_path, 
+                                rov_cover=rov_cover, 
+                                nombre_archivo=nombre_pdf
+                            )
+                            st.session_state.ic_pdf_generado = pdf_generado
+                            st.success("✅ PDF Generado con Éxito.")
+                        except Exception as e:
+                            st.error(f"Falla técnica al generar el PDF: {str(e)}")
+                            
+            if st.session_state.get("ic_pdf_generado") and os.path.exists(st.session_state.ic_pdf_generado):
+                with open(st.session_state.ic_pdf_generado, "rb") as f:
+                    st.download_button("Descargar Informe PDF", data=f, file_name=st.session_state.ic_pdf_generado, mime="application/pdf", use_container_width=True)
+
+        with col_gen2:
+            if st.button("✉️ 2. GENERAR TEXTO PARA CORREO (Copiar/Pegar)", use_container_width=True):
+                if not st.session_state.ic_data:
+                    st.error("Faltan datos de contexto en Pestaña 1.")
+                else:
+                    data = st.session_state.ic_data
+                    texto_correo = f"""CENTRO
+ {data.get('centro', '')}
+
+NOMBRE ASISTENTE/ J.CENTRO
+ {data.get('encargado', '')}
+
+NOMBRE OPERADOR
+ {data.get('piloto', '')}
+
+DISPONIBLE
+ {data.get('disponibilidad', '')}
+
+FECHA ULTIMO INGRESO
+ {data.get('ingreso', datetime.date.today()).strftime('%d-%m-%Y')}
+
+FECHA PROXIMO INGRESO
+ {data.get('proximo', datetime.date.today()).strftime('%d-%m-%Y')}
+
+DIAS TRABAJADOS CENTRO
+ {data.get('dias_trabajados', 1)}
+
+DIAS PUERTO CERRADO
+ {data.get('dias_cerrado', 0)}
+
+DIAS FALLAS ROV
+ {data.get('dias_fallas', 0)}
+
+BACKUP OPERATIVO
+ {data.get('backup', '')}
+
+GRABER OPERATIVO
+ {data.get('graber', '')}
+
+ACTIVIDAD AM
+ {data.get('actividad_am', '')}
+
+ACTIVIDAD PM
+ {data.get('actividad_pm', '')}
+
+OBSERVACIONES
+ {ic_observaciones}
+"""
+                    st.code(texto_correo, language='text')
+
+        st.divider()
+        st.subheader("Acciones de Fin de Semana")
+        st.info("La plataforma ha ido guardando silenciosamente todas las anomalías que registraste durante la semana en una base de datos temporal.")
+        if not st.session_state.historial_excel_semanal.empty:
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                st.session_state.historial_excel_semanal.to_excel(writer, index=False, sheet_name='Registros')
+            
+            st.download_button(
+                label="📊 DESCARGAR CONSOLIDADO SEMANAL (EXCEL)", 
+                data=buffer.getvalue(), 
+                file_name=f"Consolidado_Semanal_{datetime.date.today()}.xlsx", 
+                mime="application/vnd.ms-excel",
+                use_container_width=True
+            )
+            
+            if st.button("🧹 Limpiar memoria del Excel (Usar el lunes)", use_container_width=True):
+                st.session_state.historial_excel_semanal = pd.DataFrame(columns=[
+                    "Fecha", "Semana", "Jaula", "Centro", "Tipo Red", "Anomalia", "Ubicacion", "Profundidad", "Estado"
+                ])
+                st.rerun()
+        else:
+            st.warning("No hay registros guardados para generar el Excel esta semana.")
+
     st.divider()
 
     tab1, tab2, tab3 = st.tabs(["1️⃣ Contexto", "2️⃣ Registro de Anomalías", "3️⃣ Compilar y Generar PDF"])

@@ -175,7 +175,6 @@ if 'hpt_step' not in st.session_state: st.session_state.hpt_step = 1
 if 'hpt_pdf_generado' not in st.session_state: st.session_state.hpt_pdf_generado = None
 if 'rd_pdf_generado' not in st.session_state: st.session_state.rd_pdf_generado = None
 
-# Nuevas variables de estado para el Informe Consolidado
 if 'ic_pdf_generado' not in st.session_state: st.session_state.ic_pdf_generado = None
 if 'anomalias' not in st.session_state: st.session_state.anomalias = []
 if 'ic_data' not in st.session_state: st.session_state.ic_data = {}
@@ -216,7 +215,6 @@ def obtener_ruta_logo():
     return None
 
 def optimizar_imagen_ram(file_bytes_or_path, max_dim=800):
-    """Comprime imágenes pesadas en memoria RAM para evitar que el servidor colapse (OOM)."""
     try:
         if isinstance(file_bytes_or_path, bytes):
             img = Image.open(io.BytesIO(file_bytes_or_path))
@@ -250,37 +248,30 @@ def procesar_firma(canvas_obj, filename):
     return False
 
 def generar_pdf_consolidado(datos, anomalias, logo_filename, rov_cover, nombre_archivo):
-    """Genera el Informe Consolidado replicando el diseño visual de referencia."""
     pdf = FPDF(orientation='P', unit='mm', format='A4')
     pdf.set_auto_page_break(auto=True, margin=15)
     
-    # ---------------------------------------------------------
     # PÁGINA 1: PORTADA
-    # ---------------------------------------------------------
     pdf.add_page()
-    
-    # Header simulado (Logos)
     pdf.set_font("Arial", 'B', 16)
-    pdf.set_text_color(15, 55, 105) # Azul oscuro
+    pdf.set_text_color(15, 55, 105) 
     pdf.cell(60, 10, "TECHTRIDENT", border=0, align='L')
     pdf.cell(70, 10, "ÁREA ROBÓTICA", border=0, align='C')
-    pdf.set_text_color(0, 102, 204) # Azul claro
+    pdf.set_text_color(0, 102, 204) 
     cliente_str = str(datos.get("cliente", "CLIENTE")).upper()
     pdf.cell(60, 10, cliente_str[:20], border=0, align='R', ln=True)
     pdf.line(10, 22, 200, 22)
     pdf.ln(10)
     
-    # Imagen Central del ROV
     if rov_cover and os.path.exists(rov_cover):
         try:
             pdf.image(rov_cover, x=25, y=30, w=160)
-            pdf.set_y(120) # Bajar el cursor después de la imagen
+            pdf.set_y(120) 
         except:
             pdf.set_y(60)
     else:
         pdf.set_y(60)
         
-    # Títulos Principales
     pdf.set_font("Arial", 'B', 24)
     pdf.set_text_color(0, 0, 0)
     pdf.cell(0, 10, "INFORME DIARIO", border=0, ln=True, align='C')
@@ -290,7 +281,6 @@ def generar_pdf_consolidado(datos, anomalias, logo_filename, rov_cover, nombre_a
     pdf.cell(0, 10, f"CENTRO {centro_str}", border=0, ln=True, align='C')
     pdf.ln(10)
     
-    # Tabla de Datos (Diseño de Referencia + Datos de Elías)
     pdf.set_left_margin(25)
     pdf.set_right_margin(25)
     pdf.set_x(25)
@@ -310,14 +300,11 @@ def generar_pdf_consolidado(datos, anomalias, logo_filename, rov_cover, nombre_a
     add_cover_row("DISPONIBILIDAD", datos.get("disponibilidad", "Disponible"))
     add_cover_row("EQUIPO ROV", datos.get("equipo", ""))
     
-    # Agrupamos las métricas extra en un solo bloque para ahorrar espacio en portada
     metricas_str = f"Trabajados: {datos.get('dias_trabajados', 1)} | P. Cerrado: {datos.get('dias_cerrado', 0)} | Fallas: {datos.get('dias_fallas', 0)}"
     add_cover_row("DÍAS OPERATIVOS", metricas_str)
-    
     equipos_str = f"Backup: {datos.get('backup', 'SI')} | Grabber: {datos.get('graber', 'SI')}"
     add_cover_row("ESTADO DE EQUIPOS", equipos_str)
     
-    # Footer Portada
     pdf.set_y(-25)
     pdf.set_left_margin(10)
     pdf.set_right_margin(10)
@@ -325,9 +312,7 @@ def generar_pdf_consolidado(datos, anomalias, logo_filename, rov_cover, nombre_a
     pdf.set_text_color(15, 55, 105)
     pdf.cell(0, 5, "TECHTRIDENT ÁREA ROBÓTICA - CONTACTO@TECHTRIDENT.CL", align='C', ln=True)
 
-    # ---------------------------------------------------------
     # PÁGINA 2: PLANIMETRÍA Y ACTIVIDADES
-    # ---------------------------------------------------------
     pdf.add_page()
     pdf.set_font("Arial", 'B', 16)
     pdf.set_text_color(0, 0, 0)
@@ -347,7 +332,6 @@ def generar_pdf_consolidado(datos, anomalias, logo_filename, rov_cover, nombre_a
     pdf.multi_cell(0, 5, f"Observaciones de la jornada: {obs}")
     pdf.ln(10)
     
-    # Renderizar Planimetría (Esquema del centro)
     if datos.get("planimetria"):
         try:
             temp_path = f"temp_pl_{uuid.uuid4().hex[:6]}.jpg"
@@ -358,7 +342,7 @@ def generar_pdf_consolidado(datos, anomalias, logo_filename, rov_cover, nombre_a
                 aspect = h / w
                 w_mm = 170
                 h_mm = w_mm * aspect
-                if h_mm > 160: # Límite de alto
+                if h_mm > 160:
                     h_mm = 160
                     w_mm = h_mm / aspect
             pdf.image(temp_path, x=(210-w_mm)/2, y=pdf.get_y(), w=w_mm, h=h_mm)
@@ -368,11 +352,8 @@ def generar_pdf_consolidado(datos, anomalias, logo_filename, rov_cover, nombre_a
             pdf.set_font("Arial", 'I', 10)
             pdf.cell(0, 10, "(No se adjuntó esquema válido o no se pudo procesar)", ln=True, align='C')
 
-    # ---------------------------------------------------------
-    # PÁGINAS 3+: GRILLA DE FOTOGRAFÍAS (Por Jaula)
-    # ---------------------------------------------------------
+    # PÁGINAS 3+: GRILLA DE FOTOGRAFÍAS
     if anomalias:
-        # Agrupar anomalías por jaula
         anomalias_por_jaula = {}
         for a in anomalias:
             j = a.get('jaula', 'N/A')
@@ -386,7 +367,6 @@ def generar_pdf_consolidado(datos, anomalias, logo_filename, rov_cover, nombre_a
             pdf.cell(0, 10, f"IMÁGENES DE INSPECCIÓN JAULA {jaula}", border=0, ln=True, align='C')
             pdf.ln(5)
             
-            # Layout de grilla: 2 imágenes por fila (Antes / Después)
             col_width = 85
             x_start = 15
             
@@ -399,10 +379,8 @@ def generar_pdf_consolidado(datos, anomalias, logo_filename, rov_cover, nombre_a
                     
                 y_base = pdf.get_y()
                 
-                # Helper para dibujar una "Card" fotográfica
                 def draw_photo_card(foto_data, x_pos, is_reparada=False):
                     pdf.set_xy(x_pos, y_base)
-                    # Dibujar marco gris
                     pdf.set_draw_color(200, 200, 200)
                     pdf.rect(x_pos, y_base, col_width, 65)
                     
@@ -418,12 +396,10 @@ def generar_pdf_consolidado(datos, anomalias, logo_filename, rov_cover, nombre_a
                                 if h > 45:
                                     h = 45
                                     w = h / asp
-                            # Centrar imagen en su caja
                             pdf.image(temp, x=x_pos + 2 + (col_width-4-w)/2, y=y_base + 2, w=w, h=h)
                             os.remove(temp)
                         except: pass
                     
-                    # Textos descriptivos debajo de la foto
                     pdf.set_xy(x_pos + 2, y_base + 48)
                     pdf.set_font("Arial", '', 8)
                     pdf.set_text_color(0, 0, 0)
@@ -437,35 +413,28 @@ def generar_pdf_consolidado(datos, anomalias, logo_filename, rov_cover, nombre_a
                     texto_desc = texto_desc.encode('latin-1', 'replace').decode('latin-1')
                     pdf.multi_cell(col_width - 4, 4, texto_desc, align='C')
                     
-                    # Banner de estado
                     estado = anomalia.get('estado', '').upper()
                     if is_reparada or estado == 'REPARADA':
-                        pdf.set_text_color(0, 128, 0) # Verde
+                        pdf.set_text_color(0, 128, 0) 
                     else:
-                        pdf.set_text_color(200, 0, 0) # Rojo
+                        pdf.set_text_color(200, 0, 0) 
                     
                     pdf.set_font("Arial", 'B', 9)
                     pdf.set_xy(x_pos, y_base + 58)
                     pdf.cell(col_width, 5, estado, align='C')
                     pdf.set_text_color(0, 0, 0)
 
-                # Dibuja la foto de rotura a la izquierda
                 draw_photo_card(anomalia.get('foto_rotura'), x_start)
-                # Dibuja la foto de reparación a la derecha
                 draw_photo_card(anomalia.get('foto_reparacion'), x_start + col_width + 10, is_reparada=True)
-                
-                pdf.set_y(y_base + 70) # Bajar a la siguiente fila de fotos
+                pdf.set_y(y_base + 70) 
 
-    # ---------------------------------------------------------
-    # PÁGINA FINAL: MATRIZ DE RESULTADOS (Landscape)
-    # ---------------------------------------------------------
+    # PÁGINA FINAL: MATRIZ
     pdf.add_page(orientation='L')
     pdf.set_font("Arial", 'B', 16)
     pdf.set_text_color(0, 0, 0)
     pdf.cell(0, 10, "RESULTADOS DE LA INSPECCIÓN", border=0, ln=True, align='L')
     pdf.ln(2)
     
-    # Calcular semana actual
     try:
         fecha_obj = datos.get("fecha")
         if isinstance(fecha_obj, str):
@@ -484,12 +453,10 @@ def generar_pdf_consolidado(datos, anomalias, logo_filename, rov_cover, nombre_a
     pdf.set_fill_color(220, 220, 220)
     pdf.set_text_color(0, 0, 0)
     
-    # Header de la tabla
     for col_name, width in cols:
         pdf.cell(width, 8, col_name, border=1, fill=True, align='C')
     pdf.ln()
     
-    # Filas de la tabla
     pdf.set_font("Arial", '', 8)
     for i, a in enumerate(anomalias):
         estado = a.get('estado', '')
@@ -508,7 +475,6 @@ def generar_pdf_consolidado(datos, anomalias, logo_filename, rov_cover, nombre_a
         pdf.cell(cols[7][1], 8, ubic_safe, border=1, align='C')
         pdf.cell(cols[8][1], 8, f"{a.get('profundidad', '')}m", border=1, align='C')
         
-        # Color del estado
         if estado.lower() == 'reparada':
             pdf.set_text_color(0, 128, 0) 
         else:
@@ -519,7 +485,6 @@ def generar_pdf_consolidado(datos, anomalias, logo_filename, rov_cover, nombre_a
         pdf.cell(cols[10][1], 8, "Inspección", border=1, align='C')
         pdf.ln()
 
-    # Bloque final de observaciones debajo de la matriz
     if datos.get("observaciones"):
         pdf.ln(5)
         pdf.set_font("Arial", 'B', 10)
@@ -912,6 +877,7 @@ elif st.session_state.current_page == 'main_menu':
     with c1:
         if st.button("⚓ MÓDULO HPT", use_container_width=True): set_page('hpt_menu'); st.rerun()
         if st.button("📋 ENTREGA DE TURNO", use_container_width=True): set_page('entrega_turno'); st.rerun()
+        if st.button("✉️ REPORTE CORREO (ELÍAS)", use_container_width=True): set_page('reporte_correo'); st.rerun()
         if st.button("📈 GRÁFICOS GERENCIALES", use_container_width=True): set_page('panel_graficos'); st.rerun()
     with c2:
         if st.button("🚢 REPORTE DIARIO", use_container_width=True): set_page('reporte_diario'); st.rerun()
@@ -926,236 +892,6 @@ elif st.session_state.current_page == 'main_menu':
         st.session_state.admin_acceso_graficos = False
         set_page('login')
         st.rerun()
-
-elif st.session_state.current_page == 'informe_consolidado':
-    st.button("⬅️ Volver al Menú Principal", on_click=set_page, args=('main_menu',))
-    st.markdown("<h1 style='text-align: center;'>📑 Informe Consolidado Operativo (PDF Detallado)</h1>", unsafe_allow_html=True)
-    st.info("Este módulo genera el archivo PDF formal con la planimetría y el registro fotográfico (estilo InDesign), además del Excel semanal de respaldo.")
-    st.divider()
-
-    # Inicializar estado para el Excel Semanal si no existe
-    if 'historial_excel_semanal' not in st.session_state:
-        st.session_state.historial_excel_semanal = pd.DataFrame(columns=[
-            "Fecha", "Semana", "Jaula", "Centro", "Tipo Red", "Anomalia", "Ubicacion", "Profundidad", "Estado"
-        ])
-
-    tab1, tab2, tab3 = st.tabs(["1️⃣ Contexto y Operativa", "2️⃣ Registro de Anomalías (Fotos)", "3️⃣ Compilar PDF y Texto Correo"])
-
-    with tab1:
-        st.subheader("Datos de la Inspección")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            ic_cliente = st.selectbox("Empresa / Cliente", ["Salmones Blumar", "Salmones Blumar Magallanes", "Otra Empresa"])
-            opciones_centros = list(st.session_state.db_centros_areas.keys())
-            ic_centro = st.selectbox("Centro de Cultivo", opciones_centros)
-            ic_fecha = st.date_input("Fecha de Inspección", value=datetime.date.today())
-        with c2:
-            ic_encargado = st.text_input("Asistente/Encargado de Centro", value=st.session_state.ic_data.get("encargado", ""))
-            ic_piloto = st.text_input("Piloto ROV", value=st.session_state.current_user)
-            ic_equipo = st.selectbox("Equipo ROV Utilizado", ["Deep Trekker DTG3", "MC Petrohue", "Chasing Promax", "Fifish vs xpert"])
-        with c3:
-            ic_disponibilidad = st.selectbox("Disponibilidad", ["Disponible", "Enfermo", "Licencia Médica", "No disponible"])
-            ic_ingreso = st.date_input("Fecha último ingreso")
-            ic_proximo = st.date_input("Fecha próximo ingreso")
-            
-        c4, c5, c6 = st.columns(3)
-        with c4:
-            ic_dias_cerrado = st.number_input("Días puerto cerrado", min_value=0, value=0)
-            ic_dias_fallas = st.number_input("Días fallas ROV", min_value=0, value=0)
-        with c5:
-            ic_backup = st.radio("Backup Operativo", ["SI", "NO"], horizontal=True)
-            ic_graber = st.radio("Graber Operativo", ["SI", "NO"], horizontal=True)
-        with c6:
-            ic_planimetria = st.file_uploader("📸 Subir Esquema/Planimetría del Centro", type=['jpg', 'jpeg', 'png'])
-
-        st.subheader("Actividades Diarias")
-        col_act1, col_act2 = st.columns(2)
-        with col_act1:
-            ic_act_am = st.text_area("Actividad AM", placeholder="Ej: INSPECCIÓN PECERA J101...")
-        with col_act2:
-            ic_act_pm = st.text_area("Actividad PM", placeholder="Ej: EXTRACCIÓN MORTALIDAD J101...")
-            
-        if st.button("Guardar Datos Generales", type="primary"):
-            dias_trabajados = (datetime.date.today() - ic_ingreso).days + 1
-            if dias_trabajados < 1: dias_trabajados = 1
-                
-            st.session_state.ic_data.update({
-                "cliente": ic_cliente, "centro": ic_centro, "fecha": ic_fecha,
-                "encargado": ic_encargado, "piloto": ic_piloto, "equipo": ic_equipo,
-                "disponibilidad": ic_disponibilidad, "ingreso": ic_ingreso, "proximo": ic_proximo,
-                "dias_trabajados": dias_trabajados, "dias_cerrado": ic_dias_cerrado, "dias_fallas": ic_dias_fallas,
-                "backup": ic_backup, "graber": ic_graber, "actividad_am": ic_act_am, "actividad_pm": ic_act_pm,
-                "planimetria": ic_planimetria.getvalue() if ic_planimetria else st.session_state.ic_data.get("planimetria")
-            })
-            st.success("✅ Datos operativos guardados exitosamente. Pasa a la pestaña 2.")
-
-    with tab2:
-        st.subheader("Registro Dinámico de Roturas/Anomalías")
-        st.write("Agrega aquí cada hallazgo para armar la matriz y la grilla de fotos automáticamente.")
-        with st.form("form_anomalia", clear_on_submit=True):
-            col_a1, col_a2 = st.columns(2)
-            with col_a1:
-                jaula = st.text_input("N° de Jaula (Ej: 101, 102)")
-                tipo_red = st.selectbox("Tipo de Red", ["Lobera", "Pecera", "Pajarera"])
-                desc = st.text_area("Descripción de la Anomalía (Ej: Rotura 2x1 cuadros)")
-            with col_a2:
-                ubicacion = st.text_input("Ubicación (Ej: Lateral Este, Fondo, Cabecera)")
-                profundidad = st.number_input("Profundidad (metros)", min_value=0.0, step=0.1)
-                estado = st.selectbox("Estado", ["Reparada", "Pendiente"])
-                
-            st.markdown("**Evidencia Fotográfica**")
-            col_f1, col_f2 = st.columns(2)
-            with col_f1:
-                foto_antes = st.file_uploader("Foto Antes (Rotura/Hallazgo)", type=['jpg', 'jpeg', 'png'], key="ic_f1")
-            with col_f2:
-                foto_despues = st.file_uploader("Foto Después (Reparación)", type=['jpg', 'jpeg', 'png'], key="ic_f2")
-                
-            if st.form_submit_button("➕ Agregar a la Matriz", use_container_width=True):
-                if not jaula or not desc:
-                    st.error("⚠️ La Jaula y la Descripción son obligatorias.")
-                else:
-                    nueva_anomalia = {
-                        "id": str(uuid.uuid4())[:6], "jaula": jaula, "tipo_red": tipo_red,
-                        "descripcion": desc, "ubicacion": ubicacion, "profundidad": profundidad,
-                        "estado": estado, "foto_rotura": foto_antes.getvalue() if foto_antes else None,
-                        "foto_reparacion": foto_despues.getvalue() if foto_despues else None
-                    }
-                    st.session_state.anomalias.append(nueva_anomalia)
-                    
-                    # Añadir silenciosamente al DataFrame de Excel Semanal
-                    semana_actual = datetime.date.today().isocalendar()[1]
-                    nueva_fila = pd.DataFrame([{
-                        "Fecha": datetime.date.today(), "Semana": semana_actual, "Jaula": jaula,
-                        "Centro": st.session_state.ic_data.get("centro", "N/A"), "Tipo Red": tipo_red,
-                        "Anomalia": desc, "Ubicacion": ubicacion, "Profundidad": profundidad, "Estado": estado
-                    }])
-                    st.session_state.historial_excel_semanal = pd.concat([st.session_state.historial_excel_semanal, nueva_fila], ignore_index=True)
-                    
-                    st.success(f"✅ Registrado exitosamente en Jaula {jaula}.")
-        
-        st.markdown("---")
-        st.markdown(f"### Anomalías en Memoria para el Reporte de Hoy ({len(st.session_state.anomalias)})")
-        if not st.session_state.anomalias:
-            st.info("No hay anomalías registradas hoy.")
-        else:
-            for i, an in enumerate(st.session_state.anomalias):
-                with st.container(border=True):
-                    c_an1, c_an2 = st.columns([5, 1])
-                    with c_an1:
-                        st.markdown(f"**Jaula {an['jaula']} ({an['tipo_red']}) - {an['estado']}**")
-                        st.write(f"{an['descripcion']} | Prof: {an['profundidad']}m | Ubicación: {an['ubicacion']}")
-                    with c_an2:
-                        if st.button("❌", key=f"del_{an['id']}", use_container_width=True):
-                            st.session_state.anomalias.pop(i)
-                            st.rerun()
-
-    with tab3:
-        st.subheader("Paso Final: Compilación")
-        ic_observaciones = st.text_area("Observaciones Generales de la Inspección", placeholder="Resumen final para la matriz y el correo...", height=100)
-        
-        col_gen1, col_gen2 = st.columns(2)
-        with col_gen1:
-            if st.button("📥 1. GENERAR INFORME DETALLADO (PDF)", type="primary", use_container_width=True):
-                if not st.session_state.ic_data:
-                    st.error("⚠️ Guarde los datos de contexto en la Pestaña 1 primero.")
-                else:
-                    st.session_state.ic_data["observaciones"] = ic_observaciones
-                    with st.spinner("Compilando arquitectura del PDF estilo InDesign..."):
-                        nombre_pdf = f"INFORME_DIARIO_{st.session_state.ic_data.get('centro','').replace(' ', '')}_{st.session_state.ic_data.get('fecha')}.pdf"
-                        try:
-                            logo_path = obtener_ruta_logo()
-                            # Asumimos que rov_cover.jpg se subirá a la carpeta raíz del proyecto en Railway
-                            rov_cover = "rov_cover.jpg" if os.path.exists("rov_cover.jpg") else None
-                            
-                            pdf_generado = generar_pdf_consolidado(
-                                datos=st.session_state.ic_data, 
-                                anomalias=st.session_state.anomalias, 
-                                logo_filename=logo_path, 
-                                rov_cover=rov_cover, 
-                                nombre_archivo=nombre_pdf
-                            )
-                            st.session_state.ic_pdf_generado = pdf_generado
-                            st.success("✅ PDF Generado con Éxito.")
-                        except Exception as e:
-                            st.error(f"Falla técnica al generar el PDF: {str(e)}")
-                            
-            if st.session_state.get("ic_pdf_generado") and os.path.exists(st.session_state.ic_pdf_generado):
-                with open(st.session_state.ic_pdf_generado, "rb") as f:
-                    st.download_button("Descargar Informe PDF", data=f, file_name=st.session_state.ic_pdf_generado, mime="application/pdf", use_container_width=True)
-
-        with col_gen2:
-            if st.button("✉️ 2. GENERAR TEXTO PARA CORREO (Copiar/Pegar)", use_container_width=True):
-                if not st.session_state.ic_data:
-                    st.error("Faltan datos de contexto en Pestaña 1.")
-                else:
-                    data = st.session_state.ic_data
-                    texto_correo = f"""CENTRO
- {data.get('centro', '')}
-
-NOMBRE ASISTENTE/ J.CENTRO
- {data.get('encargado', '')}
-
-NOMBRE OPERADOR
- {data.get('piloto', '')}
-
-DISPONIBLE
- {data.get('disponibilidad', '')}
-
-FECHA ULTIMO INGRESO
- {data.get('ingreso', datetime.date.today()).strftime('%d-%m-%Y')}
-
-FECHA PROXIMO INGRESO
- {data.get('proximo', datetime.date.today()).strftime('%d-%m-%Y')}
-
-DIAS TRABAJADOS CENTRO
- {data.get('dias_trabajados', 1)}
-
-DIAS PUERTO CERRADO
- {data.get('dias_cerrado', 0)}
-
-DIAS FALLAS ROV
- {data.get('dias_fallas', 0)}
-
-BACKUP OPERATIVO
- {data.get('backup', '')}
-
-GRABER OPERATIVO
- {data.get('graber', '')}
-
-ACTIVIDAD AM
- {data.get('actividad_am', '')}
-
-ACTIVIDAD PM
- {data.get('actividad_pm', '')}
-
-OBSERVACIONES
- {ic_observaciones}
-"""
-                    st.code(texto_correo, language='text')
-
-        st.divider()
-        st.subheader("Acciones de Fin de Semana")
-        st.info("La plataforma ha ido guardando silenciosamente todas las anomalías que registraste durante la semana en una base de datos temporal.")
-        if not st.session_state.historial_excel_semanal.empty:
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                st.session_state.historial_excel_semanal.to_excel(writer, index=False, sheet_name='Registros')
-            
-            st.download_button(
-                label="📊 DESCARGAR CONSOLIDADO SEMANAL (EXCEL)", 
-                data=buffer.getvalue(), 
-                file_name=f"Consolidado_Semanal_{datetime.date.today()}.xlsx", 
-                mime="application/vnd.ms-excel",
-                use_container_width=True
-            )
-            
-            if st.button("🧹 Limpiar memoria del Excel (Usar el lunes)", use_container_width=True):
-                st.session_state.historial_excel_semanal = pd.DataFrame(columns=[
-                    "Fecha", "Semana", "Jaula", "Centro", "Tipo Red", "Anomalia", "Ubicacion", "Profundidad", "Estado"
-                ])
-                st.rerun()
-        else:
-            st.warning("No hay registros guardados para generar el Excel esta semana.")
 
 elif st.session_state.current_page == 'hpt_menu':
     st.button("⬅️ Volver al Menú Principal", on_click=set_page, args=('main_menu',))
@@ -1345,10 +1081,10 @@ elif st.session_state.current_page == 'hpt_nuevo':
             col_f1, col_f2 = st.columns(2)
             with col_f1:
                 st.write("Firma Supervisor Servicio (Piloto)")
-                firma_sup_serv = st_canvas(stroke_width=2, stroke_color="#000", background_color="#FFF", height=150, width=300, key="firma_serv")
+                firma_sup_serv = st_canvas(stroke_width=2, stroke_color="#000", background_color="#FFF", height=150, width=300, return_image_data=True, key="firma_serv")
             with col_f2:
                 st.write("Firma Encargado de Centro")
-                firma_encargado = st_canvas(stroke_width=2, stroke_color="#000", background_color="#FFF", height=150, width=300, key="firma_encargado")
+                firma_encargado = st_canvas(stroke_width=2, stroke_color="#000", background_color="#FFF", height=150, width=300, return_image_data=True, key="firma_encargado")
 
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
@@ -1360,7 +1096,7 @@ elif st.session_state.current_page == 'hpt_nuevo':
                 st.rerun()
                 
         with col_btn2:
-            if st.button("GENERAR Y ENVIAR HPT", type="primary", use_container_width=True):
+            if st.button("GENERAR Y ALMACENAR HPT", type="primary", use_container_width=True):
                 data = st.session_state.hpt_data
                 barra_carga = st.progress(0, text="⚙️ Generando PDF...")
                 
@@ -1667,10 +1403,10 @@ elif st.session_state.current_page == 'reporte_diario':
     col_f_rd1, col_f_rd2 = st.columns(2)
     with col_f_rd1:
         st.write("Firma Piloto ROV")
-        firma_piloto_rd = st_canvas(stroke_width=2, stroke_color="#000", background_color="#FFF", height=150, width=300, key="firma_p_rd")
+        firma_piloto_rd = st_canvas(stroke_width=2, stroke_color="#000", background_color="#FFF", height=150, width=300, return_image_data=True, key="firma_p_rd")
     with col_f_rd2:
         st.write("Firma Encargado de Centro")
-        firma_encargado_rd = st_canvas(stroke_width=2, stroke_color="#000", background_color="#FFF", height=150, width=300, key="firma_e_rd")
+        firma_encargado_rd = st_canvas(stroke_width=2, stroke_color="#000", background_color="#FFF", height=150, width=300, return_image_data=True, key="firma_e_rd")
 
     submit_rd = st.button("GENERAR Y GUARDAR REPORTE DIARIO", type="primary", use_container_width=True)
 
@@ -1723,7 +1459,7 @@ elif st.session_state.current_page == 'reporte_diario':
             pdf_rd.set_font("Arial", "B", 9); pdf_rd.cell(35, h_cell, "Rango Horario:", border=1); pdf_rd.set_font("Arial", "", 9); pdf_rd.cell(60, h_cell, f"{hora_inicio_rd} - {hora_termino_rd}", border=1, ln=True)
             
             pdf_rd.set_font("Arial", "B", 9); pdf_rd.cell(35, h_cell, "Piloto ROV:", border=1); pdf_rd.set_font("Arial", "", 9); pdf_rd.cell(60, h_cell, piloto_rd, border=1)
-            pdf_rd.set_font("Arial", "B", 9); pdf_rd.cell(35, h_cell, "Nombre Ponton:", border=1); pdf.set_font("Arial", "", 9); pdf_rd.cell(60, h_cell, ponton_rd, border=1, ln=True)
+            pdf_rd.set_font("Arial", "B", 9); pdf_rd.cell(35, h_cell, "Nombre Ponton:", border=1); pdf_rd.set_font("Arial", "", 9); pdf_rd.cell(60, h_cell, ponton_rd, border=1, ln=True)
             
             pdf_rd.set_font("Arial", "B", 9); pdf_rd.cell(35, h_cell, "Empresa:", border=1); pdf_rd.set_font("Arial", "", 9); pdf_rd.cell(60, h_cell, empresa_rd, border=1)
             pdf_rd.set_font("Arial", "B", 9); pdf_rd.cell(35, h_cell, "Centro Cultivo:", border=1); pdf_rd.set_font("Arial", "", 9); pdf_rd.cell(60, h_cell, centro_rd, border=1, ln=True)
@@ -1737,7 +1473,7 @@ elif st.session_state.current_page == 'reporte_diario':
             pdf_rd.ln(8)
             pdf_rd.set_fill_color(15, 55, 105); pdf_rd.set_text_color(255, 255, 255)
             pdf_rd.set_font("Arial", "B", 10); pdf_rd.cell(190, 8, "2. DETALLE OPERATIVO", border=0, ln=True, fill=True)
-            pdf_rd.ln(2)
+            pdf_rd.ln(2) 
             pdf_rd.set_fill_color(240, 240, 240); pdf_rd.set_text_color(0, 0, 0); pdf_rd.set_font("Arial", "B", 9)
             pdf_rd.cell(190, 8, "Estructura Intervenida:", border=1, ln=True, fill=True)
             pdf_rd.set_font("Arial", "", 9); pdf_rd.cell(190, 8, str(jaula_rd), border=1, ln=True)
@@ -1745,7 +1481,7 @@ elif st.session_state.current_page == 'reporte_diario':
             pdf_rd.ln(4)
             pdf_rd.set_fill_color(15, 55, 105); pdf_rd.set_text_color(255, 255, 255)
             pdf_rd.set_font("Arial", "B", 10); pdf_rd.cell(190, 8, "Descripcion de la Tarea Realizada:", border=0, ln=True, fill=True)
-            pdf_rd.ln(2)
+            pdf_rd.ln(2) 
             pdf_rd.set_text_color(0, 0, 0); pdf_rd.set_font("Arial", "", 9)
             
             x_start = pdf_rd.get_x()
@@ -1768,7 +1504,7 @@ elif st.session_state.current_page == 'reporte_diario':
             if pdf_rd.get_y() > 220: pdf_rd.add_page()
             pdf_rd.set_fill_color(15, 55, 105); pdf_rd.set_text_color(255, 255, 255)
             pdf_rd.set_font("Arial", "B", 10); pdf_rd.cell(190, 8, "3. CUADRO DE FIRMAS RESPONSABLES", border=0, ln=True, fill=True)
-            pdf_rd.ln(2)
+            pdf_rd.ln(2) 
             pdf_rd.set_text_color(0, 0, 0)
             pdf_rd.cell(95, 25, "", border=1); pdf_rd.cell(95, 25, "", border=1, ln=True)
             id_firmas_rd = uuid.uuid4().hex[:8]; f_pil_rd = f"f_p_rd_{id_firmas_rd}.jpg"; f_enc_rd = f"f_e_rd_{id_firmas_rd}.jpg"
@@ -2012,7 +1748,7 @@ elif st.session_state.current_page == 'entrega_turno':
                 f5 = st.file_uploader(f"Foto General ({r_nombre})", type=['png','jpg','jpeg'], key=f"f5_{r_id}")
                 if f5: diccionario_fotos_final[f"Foto General - {r_nombre}"] = f5
 
-    st.write("✍️ Firma Piloto ROV Saliente"); canvas_piloto = st_canvas(fill_color="rgba(255, 255, 255, 0)", stroke_width=2, stroke_color="#000", background_color="#FFF", height=120, width=300, drawing_mode="freedraw", key="canvas_et")
+    st.write("✍️ Firma Piloto ROV Saliente"); canvas_piloto = st_canvas(fill_color="rgba(255, 255, 255, 0)", stroke_width=2, stroke_color="#000", background_color="#FFF", height=120, width=300, drawing_mode="freedraw", return_image_data=True, key="canvas_et")
     correo_destino_et = st.text_input("Correo electrónico del destinatario", value="reportesrovincinel@gmail.com")
 
     if st.button("Guardar, Generar PDF y Enviar", type="primary", use_container_width=True):
@@ -2132,6 +1868,130 @@ elif st.session_state.current_page == 'entrega_turno':
                 with open(archivo_pdf_et, "rb") as f: st.download_button("📥 Descargar Copia Local PDF", data=f.read(), file_name=archivo_pdf_et, mime="application/pdf")
             except Exception as e:
                 barra_et.empty(); st.error(f"Error Técnico: {e}")
+
+elif st.session_state.current_page == 'reporte_correo':
+    st.button("⬅️ Volver al Menú Principal", on_click=set_page, args=('main_menu',))
+    st.markdown("<h1 style='text-align: center;'>✉️ Generador de Texto para Correo y Excel</h1>", unsafe_allow_html=True)
+    st.info("Utiliza este módulo diariamente para generar el texto del correo exigido por jefatura. Los datos se irán guardando solos para el Excel del domingo.")
+    st.divider()
+
+    if 'historial_excel_elias' not in st.session_state:
+        st.session_state.historial_excel_elias = pd.DataFrame(columns=[
+            "Fecha", "Centro", "Asistente/J.Centro", "Operador", "Disponibilidad",
+            "Ingreso", "Proximo Ingreso", "Dias Trabajados", "Dias P. Cerrado", "Dias Fallas ROV",
+            "Backup", "Grabber", "Actividad AM", "Actividad PM", "Observaciones"
+        ])
+
+    with st.form("form_correo"):
+        col1, col2 = st.columns(2)
+        with col1:
+            centro = st.selectbox("Centro", list(st.session_state.db_centros_areas.keys()))
+            nombre_jefe = st.text_input("Nombre Asistente/J.Centro")
+            nombre_operador = st.text_input("Nombre Operador (Piloto)", value=st.session_state.current_user)
+            disponibilidad = st.selectbox("Disponibilidad", ["Disponible", "Enfermo", "Licencia Médica", "No disponible"])
+        with col2:
+            fecha_ingreso = st.date_input("Fecha último ingreso")
+            fecha_proximo = st.date_input("Fecha próximo ingreso")
+            dias_cerrado = st.number_input("Días puerto cerrado", min_value=0, value=0)
+            dias_fallas = st.number_input("Días fallas ROV", min_value=0, value=0)
+
+        col3, col4 = st.columns(2)
+        with col3:
+            backup = st.radio("Backup Operativo", ["SI", "NO"], horizontal=True)
+        with col4:
+            graber = st.radio("Graber Operativo", ["SI", "NO"], horizontal=True)
+
+        actividad_am = st.text_area("Actividad AM", placeholder="INSPECCIÓN PECERA J101...")
+        actividad_pm = st.text_area("Actividad PM", placeholder="EXTRACCIÓN MORTALIDAD J101...")
+        observaciones = st.text_area("Observaciones", placeholder="SE ENCUENTRA ROTURA...")
+
+        submit_correo = st.form_submit_button("GENERAR TEXTO Y GUARDAR DATOS", use_container_width=True)
+
+    if submit_correo:
+        dias_trabajados = (datetime.date.today() - fecha_ingreso).days + 1
+        if dias_trabajados < 1: dias_trabajados = 1
+
+        texto_correo = f"""CENTRO
+ {centro}
+
+NOMBRE ASISTENTE/ J.CENTRO
+ {nombre_jefe}
+
+NOMBRE OPERADOR
+ {nombre_operador}
+
+DISPONIBLE
+ {disponibilidad}
+
+FECHA ULTIMO INGRESO
+ {fecha_ingreso.strftime('%d-%m-%Y')}
+
+FECHA PROXIMO INGRESO
+ {fecha_proximo.strftime('%d-%m-%Y')}
+
+DIAS TRABAJADOS CENTRO
+ {dias_trabajados}
+
+DIAS PUERTO CERRADO
+ {dias_cerrado}
+
+DIAS FALLAS ROV
+ {dias_fallas}
+
+BACKUP OPERATIVO
+ {backup}
+
+GRABER OPERATIVO
+ {graber}
+
+ACTIVIDAD AM
+ {actividad_am}
+
+ACTIVIDAD PM
+ {actividad_pm}
+
+OBSERVACIONES
+ {observaciones}
+"""
+        
+        nueva_fila = pd.DataFrame([{
+            "Fecha": datetime.date.today().strftime('%d-%m-%Y'), "Centro": centro, "Asistente/J.Centro": nombre_jefe,
+            "Operador": nombre_operador, "Disponibilidad": disponibilidad, "Ingreso": fecha_ingreso.strftime('%d-%m-%Y'),
+            "Proximo Ingreso": fecha_proximo.strftime('%d-%m-%Y'), "Dias Trabajados": dias_trabajados,
+            "Dias P. Cerrado": dias_cerrado, "Dias Fallas ROV": dias_fallas, "Backup": backup,
+            "Grabber": graber, "Actividad AM": actividad_am, "Actividad PM": actividad_pm,
+            "Observaciones": observaciones
+        }])
+        
+        st.session_state.historial_excel_elias = pd.concat([st.session_state.historial_excel_elias, nueva_fila], ignore_index=True)
+        
+        st.success("✅ Texto generado y datos guardados para el Excel dominical. Copia el texto a continuación:")
+        st.code(texto_correo, language='text')
+
+    st.divider()
+    st.subheader("📊 Exportación Dominical (Excel)")
+    if not st.session_state.historial_excel_elias.empty:
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+            st.session_state.historial_excel_elias.to_excel(writer, index=False, sheet_name='Registro Semanal')
+        
+        st.download_button(
+            label="📥 DESCARGAR EXCEL DE LA SEMANA",
+            data=buffer.getvalue(),
+            file_name=f"Registro_Semanal_{datetime.date.today()}.xlsx",
+            mime="application/vnd.ms-excel",
+            use_container_width=True
+        )
+        
+        if st.button("🧹 Limpiar registros (Usar el Lunes)", use_container_width=True):
+            st.session_state.historial_excel_elias = pd.DataFrame(columns=[
+                "Fecha", "Centro", "Asistente/J.Centro", "Operador", "Disponibilidad",
+                "Ingreso", "Proximo Ingreso", "Dias Trabajados", "Dias P. Cerrado", "Dias Fallas ROV",
+                "Backup", "Grabber", "Actividad AM", "Actividad PM", "Observaciones"
+            ])
+            st.rerun()
+    else:
+        st.info("No hay registros guardados esta semana.")
 
 elif st.session_state.current_page == 'modulo_busqueda':
     st.button("⬅️ Volver al Menú Principal", on_click=set_page, args=('main_menu',))

@@ -18,7 +18,7 @@ import uuid
 import urllib.request
 import zipfile
 import io
-import gc # Añadido para liberar memoria RAM
+import gc 
 from supabase import create_client, Client
 
 st.set_page_config(
@@ -28,7 +28,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ----------------- NUEVO ESTILO DE BOTONES 3D AZUL MARINO -----------------
 st.markdown(
     """
     <style>
@@ -89,6 +88,19 @@ st.markdown(
         color: #64748b !important;
         opacity: 1;
     }
+    
+    div[data-testid="stNumberInput"] {
+        max-width: 140px !important;
+        min-width: 120px !important;
+    }
+    
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        background: linear-gradient(180deg, rgba(15, 55, 105, 0.4) 0%, rgba(10, 36, 69, 0.8) 100%) !important;
+        border-radius: 16px !important;
+        border: 1px solid #1a5b9c !important;
+        padding: 0.5rem !important;
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3) !important;
+    }
     </style>
     """,
     unsafe_allow_html=True
@@ -127,7 +139,17 @@ if 'db_centros_areas' not in st.session_state:
 if 'db_centros_correos' not in st.session_state: 
     st.session_state.db_centros_correos = {"Centro Punta Vergara": "contacto@techtrident.cl"}
 
-CORREOS_PREVENCION = ["No enviar (Modo Pruebas)", "No enviar (Modo Pruebas)"]
+if 'db_rovs' not in st.session_state:
+    st.session_state.db_rovs = {
+        1: {"nombre": "ROV 1", "serie_rov": "12992601117", "serie_ctrl": "12992601117", "mantencion": datetime.date(2026, 8, 2)},
+        2: {"nombre": "ROV 2", "serie_rov": "12992601127", "serie_ctrl": "12992601127", "mantencion": datetime.date(2026, 8, 2)}
+    }
+if 'rov_activo' not in st.session_state:
+    st.session_state.rov_activo = 1
+
+if 'historial_mantenciones' not in st.session_state:
+    st.session_state.historial_mantenciones = []
+
 CORREOS_OCULTOS = []
 
 RANGOS_INICIO = [f"{str(h).zfill(2)}:{str(m).zfill(2)}" for h in range(6, 12) for m in (0, 30)]  
@@ -151,6 +173,11 @@ if 'hpt_step' not in st.session_state: st.session_state.hpt_step = 1
 
 if 'hpt_pdf_generado' not in st.session_state: st.session_state.hpt_pdf_generado = None
 if 'rd_pdf_generado' not in st.session_state: st.session_state.rd_pdf_generado = None
+if 'ic_pdf_generado' not in st.session_state: st.session_state.ic_pdf_generado = None
+
+if 'anomalias' not in st.session_state: st.session_state.anomalias = []
+if 'ic_data' not in st.session_state: st.session_state.ic_data = {}
+if 'historial_reportes_correo' not in st.session_state: st.session_state.historial_reportes_correo = []
 
 if 'hpt_data' not in st.session_state:
     opciones_c = list(st.session_state.db_centros_areas.keys())
@@ -161,7 +188,7 @@ if 'hpt_data' not in st.session_state:
         "trabajo_rutinario": "Sí",
         "epp": [False]*7, "faena": "Inspeccion Red pecera", "erc": [False]*6, "tc_duracion": "15 minutos",
         "check_instruido": "Sí", "check_clima": "Sí", "check_equipos": "Sí", "check_orden": "Sí",
-        "evidencia_puerto": None
+        "evidencia_puerto": None, "prevencion_1": "", "prevencion_2": ""
     }
 if 'admin_acceso_historial' not in st.session_state: st.session_state.admin_acceso_historial = False
 if 'admin_acceso_graficos' not in st.session_state: st.session_state.admin_acceso_graficos = False
@@ -170,7 +197,6 @@ def set_page(page_name): st.session_state.current_page = page_name
 def set_step(step_number): st.session_state.hpt_step = step_number
 
 def obtener_ruta_logo():
-    """Busca el archivo de logo de TechTrident de forma absoluta y segura."""
     directorio_actual = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
     posibles = [
         "logo_techtrident.png", "logo_techtrident.PNG", "logo_techtrident.jpg", "Logo_techtrident.png",
@@ -189,7 +215,6 @@ def obtener_ruta_logo():
     return None
 
 def optimizar_imagen_ram(file_bytes_or_path, max_dim=800):
-    """Comprime imágenes pesadas en memoria RAM para evitar que el servidor colapse (OOM)."""
     try:
         if isinstance(file_bytes_or_path, bytes):
             img = Image.open(io.BytesIO(file_bytes_or_path))
@@ -199,21 +224,17 @@ def optimizar_imagen_ram(file_bytes_or_path, max_dim=800):
         if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
             img = img.convert('RGB')
             
-        # Achicamos la foto si es inmensa (ej: 4000x3000 -> 800x600)
         img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
         
         output_buffer = io.BytesIO()
-        # Guardamos comprimido en calidad 75% (No se nota en un PDF y ahorra muchísima memoria)
         img.save(output_buffer, format='JPEG', quality=75, optimize=True)
         output_buffer.seek(0)
         
-        # Limpiar la imagen original de la memoria RAM pesada
         img.close()
         gc.collect() 
         
         return output_buffer.getvalue()
     except Exception as e:
-        # Si algo falla, retorna lo original para no romper el flujo
         return file_bytes_or_path if isinstance(file_bytes_or_path, bytes) else open(file_bytes_or_path, "rb").read()
 
 def procesar_firma(canvas_obj, filename):
@@ -226,8 +247,255 @@ def procesar_firma(canvas_obj, filename):
         return True
     return False
 
-# ---------------- NUEVO MOTOR PDF DE ENTREGA DE TURNO (ESTANDARIZADO) ----------------
-def generar_pdf_entrega(datos, logo_filename, nombre_archivo, firma_path=None, imagenes_subidas=None, folio="", correlativo=""):
+def generar_pdf_consolidado(datos, anomalias, logo_filename, rov_cover, nombre_archivo):
+    pdf = FPDF(orientation='P', unit='mm', format='A4')
+    pdf.set_auto_page_break(auto=True, margin=15)
+    
+    # PÁGINA 1: PORTADA
+    pdf.add_page()
+    pdf.set_font("Arial", 'B', 16)
+    pdf.set_text_color(15, 55, 105) 
+    pdf.cell(60, 10, "TECHTRIDENT", border=0, align='L')
+    pdf.cell(70, 10, "ÁREA ROBÓTICA", border=0, align='C')
+    pdf.set_text_color(0, 102, 204) 
+    cliente_str = str(datos.get("cliente", "CLIENTE")).upper()
+    pdf.cell(60, 10, cliente_str[:20], border=0, align='R', ln=True)
+    pdf.line(10, 22, 200, 22)
+    pdf.ln(10)
+    
+    if rov_cover and os.path.exists(rov_cover):
+        try:
+            pdf.image(rov_cover, x=25, y=30, w=160)
+            pdf.set_y(120) 
+        except:
+            pdf.set_y(60)
+    else:
+        pdf.set_y(60)
+        
+    pdf.set_font("Arial", 'B', 24)
+    pdf.set_text_color(0, 0, 0)
+    pdf.cell(0, 10, "INFORME DIARIO", border=0, ln=True, align='C')
+    pdf.set_font("Arial", 'B', 18)
+    pdf.cell(0, 10, "INSPECCIÓN ROBÓTICA SUBMARINA", border=0, ln=True, align='C')
+    centro_str = str(datos.get("centro", "CENTRO")).upper()
+    pdf.cell(0, 10, f"CENTRO {centro_str}", border=0, ln=True, align='C')
+    pdf.ln(10)
+    
+    pdf.set_left_margin(25)
+    pdf.set_right_margin(25)
+    pdf.set_x(25)
+    
+    def add_cover_row(label, value):
+        pdf.set_font("Arial", 'B', 10)
+        pdf.set_fill_color(240, 240, 240)
+        pdf.cell(70, 8, f"  {label}", border=1, fill=True)
+        pdf.set_font("Arial", '', 10)
+        pdf.cell(90, 8, f"  {str(value)[:45]}", border=1, ln=True)
+
+    add_cover_row("CLIENTE", datos.get("cliente", ""))
+    add_cover_row("CENTRO", datos.get("centro", ""))
+    add_cover_row("ENCARGADO DE CENTRO", datos.get("encargado", ""))
+    add_cover_row("FECHA", datos.get("fecha", ""))
+    add_cover_row("PILOTO ROV", datos.get("piloto", ""))
+    add_cover_row("DISPONIBILIDAD", datos.get("disponibilidad", "Disponible"))
+    add_cover_row("EQUIPO ROV", datos.get("equipo", ""))
+    
+    metricas_str = f"Trabajados: {datos.get('dias_trabajados', 1)} | P. Cerrado: {datos.get('dias_cerrado', 0)} | Fallas: {datos.get('dias_fallas', 0)}"
+    add_cover_row("DÍAS OPERATIVOS", metricas_str)
+    equipos_str = f"Backup: {datos.get('backup', 'SI')} | Grabber: {datos.get('graber', 'SI')}"
+    add_cover_row("ESTADO DE EQUIPOS", equipos_str)
+    
+    pdf.set_y(-25)
+    pdf.set_left_margin(10)
+    pdf.set_right_margin(10)
+    pdf.set_font("Arial", 'B', 8)
+    pdf.set_text_color(15, 55, 105)
+    pdf.cell(0, 5, "TECHTRIDENT ÁREA ROBÓTICA - CONTACTO@TECHTRIDENT.CL", align='C', ln=True)
+
+    # PÁGINA 2: PLANIMETRÍA Y ACTIVIDADES
+    pdf.add_page()
+    pdf.set_font("Arial", 'B', 16)
+    pdf.set_text_color(0, 0, 0)
+    pdf.cell(0, 10, "ESPECIFICACIÓN DEL CENTRO E INSPECCIÓN", border=0, ln=True, align='C')
+    pdf.ln(5)
+    
+    pdf.set_font("Arial", 'B', 11)
+    pdf.cell(0, 6, "ACTIVIDADES REALIZADAS:", ln=True)
+    pdf.set_font("Arial", '', 10)
+    act_am = str(datos.get("actividad_am", "")).encode('latin-1', 'replace').decode('latin-1')
+    act_pm = str(datos.get("actividad_pm", "")).encode('latin-1', 'replace').decode('latin-1')
+    obs = str(datos.get("observaciones", "")).encode('latin-1', 'replace').decode('latin-1')
+    
+    pdf.multi_cell(0, 5, f"AM: {act_am}")
+    pdf.multi_cell(0, 5, f"PM: {act_pm}")
+    pdf.ln(3)
+    pdf.multi_cell(0, 5, f"Observaciones de la jornada: {obs}")
+    pdf.ln(10)
+    
+    if datos.get("planimetria"):
+        try:
+            temp_path = f"temp_pl_{uuid.uuid4().hex[:6]}.jpg"
+            bytes_opt = optimizar_imagen_ram(datos["planimetria"], max_dim=1200)
+            with open(temp_path, "wb") as f: f.write(bytes_opt)
+            with Image.open(temp_path) as pil_img:
+                w, h = pil_img.size
+                aspect = h / w
+                w_mm = 170
+                h_mm = w_mm * aspect
+                if h_mm > 160:
+                    h_mm = 160
+                    w_mm = h_mm / aspect
+            pdf.image(temp_path, x=(210-w_mm)/2, y=pdf.get_y(), w=w_mm, h=h_mm)
+            pdf.set_y(pdf.get_y() + h_mm + 10)
+            os.remove(temp_path)
+        except Exception as e:
+            pdf.set_font("Arial", 'I', 10)
+            pdf.cell(0, 10, "(No se adjuntó esquema válido o no se pudo procesar)", ln=True, align='C')
+
+    # PÁGINAS 3+: GRILLA DE FOTOGRAFÍAS
+    if anomalias:
+        anomalias_por_jaula = {}
+        for a in anomalias:
+            j = a.get('jaula', 'N/A')
+            if j not in anomalias_por_jaula:
+                anomalias_por_jaula[j] = []
+            anomalias_por_jaula[j].append(a)
+            
+        for jaula, lista_anomalias in anomalias_por_jaula.items():
+            pdf.add_page()
+            pdf.set_font("Arial", 'B', 16)
+            pdf.cell(0, 10, f"IMÁGENES DE INSPECCIÓN JAULA {jaula}", border=0, ln=True, align='C')
+            pdf.ln(5)
+            
+            col_width = 85
+            x_start = 15
+            
+            for idx, anomalia in enumerate(lista_anomalias):
+                if pdf.get_y() > 220:
+                    pdf.add_page()
+                    pdf.set_font("Arial", 'B', 16)
+                    pdf.cell(0, 10, f"IMÁGENES DE INSPECCIÓN JAULA {jaula} (Cont.)", border=0, ln=True, align='C')
+                    pdf.ln(5)
+                    
+                y_base = pdf.get_y()
+                
+                def draw_photo_card(foto_data, x_pos, is_reparada=False):
+                    pdf.set_xy(x_pos, y_base)
+                    pdf.set_draw_color(200, 200, 200)
+                    pdf.rect(x_pos, y_base, col_width, 65)
+                    
+                    if foto_data:
+                        try:
+                            temp = f"t_foto_{uuid.uuid4().hex[:6]}.jpg"
+                            with open(temp, "wb") as f: f.write(optimizar_imagen_ram(foto_data, 600))
+                            
+                            with Image.open(temp) as img:
+                                asp = img.height / img.width
+                                w = col_width - 4
+                                h = w * asp
+                                if h > 45:
+                                    h = 45
+                                    w = h / asp
+                            pdf.image(temp, x=x_pos + 2 + (col_width-4-w)/2, y=y_base + 2, w=w, h=h)
+                            os.remove(temp)
+                        except: pass
+                    
+                    pdf.set_xy(x_pos + 2, y_base + 48)
+                    pdf.set_font("Arial", '', 8)
+                    pdf.set_text_color(0, 0, 0)
+                    
+                    desc = anomalia.get('descripcion','')
+                    red = anomalia.get('tipo_red','')
+                    ubic = anomalia.get('ubicacion','')
+                    prof = anomalia.get('profundidad','')
+                    
+                    texto_desc = f"{desc} Red {red} {jaula}\n{ubic} {prof} metros."
+                    texto_desc = texto_desc.encode('latin-1', 'replace').decode('latin-1')
+                    pdf.multi_cell(col_width - 4, 4, texto_desc, align='C')
+                    
+                    estado = anomalia.get('estado', '').upper()
+                    if is_reparada or estado == 'REPARADA':
+                        pdf.set_text_color(0, 128, 0) 
+                    else:
+                        pdf.set_text_color(200, 0, 0) 
+                    
+                    pdf.set_font("Arial", 'B', 9)
+                    pdf.set_xy(x_pos, y_base + 58)
+                    pdf.cell(col_width, 5, estado, align='C')
+                    pdf.set_text_color(0, 0, 0)
+
+                draw_photo_card(anomalia.get('foto_rotura'), x_start)
+                draw_photo_card(anomalia.get('foto_reparacion'), x_start + col_width + 10, is_reparada=True)
+                pdf.set_y(y_base + 70) 
+
+    # PÁGINA FINAL: MATRIZ DE RESULTADOS (Landscape)
+    pdf.add_page(orientation='L')
+    pdf.set_font("Arial", 'B', 16)
+    pdf.set_text_color(0, 0, 0)
+    pdf.cell(0, 10, "RESULTADOS DE LA INSPECCIÓN", border=0, ln=True, align='L')
+    pdf.ln(2)
+    
+    try:
+        fecha_obj = datos.get("fecha")
+        if isinstance(fecha_obj, str):
+            fecha_obj = datetime.datetime.strptime(fecha_obj, "%Y-%m-%d").date()
+        semana = fecha_obj.isocalendar()[1]
+    except:
+        semana = "-"
+    
+    cols = [
+        ("N°", 8), ("Fecha", 22), ("Semana", 18), ("Jaula", 15), ("Centro", 30), 
+        ("Tipo Red", 20), ("Anomalia / Hallazgo", 60), ("Ubicación", 30), 
+        ("Profundidad", 25), ("Estado", 22), ("Servicio", 25)
+    ]
+    
+    pdf.set_font("Arial", 'B', 9)
+    pdf.set_fill_color(220, 220, 220)
+    pdf.set_text_color(0, 0, 0)
+    
+    for col_name, width in cols:
+        pdf.cell(width, 8, col_name, border=1, fill=True, align='C')
+    pdf.ln()
+    
+    pdf.set_font("Arial", '', 8)
+    for i, a in enumerate(anomalias):
+        estado = a.get('estado', '')
+        desc_safe = str(a.get('descripcion','')).replace('\n', ' ')[:40].encode('latin-1', 'replace').decode('latin-1')
+        centro_safe = str(datos.get('centro', ''))[:15].encode('latin-1', 'replace').decode('latin-1')
+        ubic_safe = str(a.get('ubicacion', ''))[:15].encode('latin-1', 'replace').decode('latin-1')
+        
+        pdf.cell(cols[0][1], 8, str(i+1), border=1, align='C')
+        pdf.cell(cols[1][1], 8, str(datos.get('fecha', '')), border=1, align='C')
+        pdf.cell(cols[2][1], 8, str(semana), border=1, align='C')
+        pdf.cell(cols[3][1], 8, str(a.get('jaula', ''))[:8], border=1, align='C')
+        pdf.cell(cols[4][1], 8, centro_safe, border=1, align='C')
+        pdf.cell(cols[5][1], 8, str(a.get('tipo_red', ''))[:10], border=1, align='C')
+        pdf.cell(cols[6][1], 8, desc_safe, border=1)
+        pdf.cell(cols[7][1], 8, ubic_safe, border=1, align='C')
+        pdf.cell(cols[8][1], 8, f"{a.get('profundidad', '')}m", border=1, align='C')
+        
+        if estado.lower() == 'reparada':
+            pdf.set_text_color(0, 128, 0) 
+        else:
+            pdf.set_text_color(200, 0, 0) 
+            
+        pdf.cell(cols[9][1], 8, estado, border=1, align='C')
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(cols[10][1], 8, "Inspección", border=1, align='C')
+        pdf.ln()
+
+    if datos.get("observaciones"):
+        pdf.ln(5)
+        pdf.set_font("Arial", 'B', 10)
+        pdf.cell(0, 6, "Observaciones Generales:", ln=True)
+        pdf.set_font("Arial", '', 9)
+        obs_safe = str(datos.get("observaciones")).encode('latin-1', 'replace').decode('latin-1')
+        pdf.multi_cell(0, 5, f"*{obs_safe}")
+
+    pdf.output(nombre_archivo)
+    return nombre_archivo
+
+def generar_pdf_entrega(datos, logo_filename, nombre_archivo, firma_path=None, diccionario_fotos=None, folio="", correlativo=""):
     pdf = FPDF()
     pdf.set_margins(10, 10, 10)
     pdf.set_auto_page_break(auto=True, margin=20) 
@@ -299,23 +567,21 @@ def generar_pdf_entrega(datos, logo_filename, nombre_archivo, firma_path=None, i
                 pdf.cell(95, 8, i1, border=b_str, ln=0)
                 pdf.cell(95, 8, i2, border=b_str2, ln=1)
 
-    # 1. INFO GENERAL
     print_section_header("1. INFORMACION GENERAL")
     print_row_2("Piloto Entrante:", d1.get("Piloto_Entrante"), "Piloto Saliente:", d1.get("Piloto_Saliente"))
     print_row_2("Fecha:", d1.get("Fecha"), "Centro:", d1.get("Centro"))
     pdf.set_font("Arial", "B", 9); pdf.cell(35, h_cell, "Area Asignada:", border=1); pdf.set_font("Arial", "", 9); pdf.cell(155, h_cell, str(d1.get("Área"))[:80], border=1, ln=True)
     pdf.ln(4)
 
-    # 2. EQUIPOS
-    d2 = datos.get("2. Estado del Equipo", {})
+    d2 = datos.get("2. Estado de los Equipos (ROV)", {})
     if pdf.get_y() > 240: pdf.add_page()
     print_section_header("2. ESTADO DE LOS EQUIPOS (ROV)")
-    print_row_2("Modelo ROV:", d2.get("Modelo_ROV"), "Estado ROV:", d2.get("Estado_ROV"))
-    print_row_2("Controlador:", d2.get("Estado_Controlador"), "Cable Umbilical:", d2.get("Cable_Umbilical"))
+    pdf.set_font("Arial", "B", 9); pdf.cell(35, h_cell, "ROV En Uso:", border=1); pdf.set_font("Arial", "", 9); pdf.cell(155, h_cell, str(d2.get("ROV_En_Uso")), border=1, ln=True)
+    pdf.set_font("Arial", "B", 9); pdf.cell(35, h_cell, "ROV Stand-by:", border=1); pdf.set_font("Arial", "", 9); pdf.cell(155, h_cell, str(d2.get("ROV_Stand_by")), border=1, ln=True)
+    print_row_2("Estado ROV (Uso):", d2.get("Estado_General_ROV"), "Cable Umbilical:", d2.get("Cable_Umbilical"))
     print_multiline("Observaciones de Equipos", d2.get("Observaciones_Equipos"))
     pdf.ln(4)
 
-    # 3. TERRENO
     d3 = datos.get("3. Terreno", {})
     if pdf.get_y() > 240: pdf.add_page()
     print_section_header("3. INFRAESTRUCTURA DE TERRENO")
@@ -324,7 +590,6 @@ def generar_pdf_entrega(datos, logo_filename, nombre_archivo, firma_path=None, i
     print_multiline("Observaciones de Infraestructura", d3.get("Observaciones_Equipamiento"))
     pdf.ln(4)
 
-    # 4 & 5. INVENTARIO
     d4 = datos.get("4. Herramientas", {})
     d5 = datos.get("5. Materiales de Mantención", {})
     if pdf.get_y() > 220: pdf.add_page()
@@ -335,7 +600,6 @@ def generar_pdf_entrega(datos, logo_filename, nombre_archivo, firma_path=None, i
     print_list("Materiales/Insumos Faltantes", d5.get("Materiales_Faltantes", []))
     pdf.ln(4)
 
-    # 6. OPERATIVA
     d6 = datos.get("6. Operativa de Turno (14 días)", {})
     if pdf.get_y() > 200: pdf.add_page()
     print_section_header("5. RESUMEN OPERATIVO DEL TURNO (14 DIAS)")
@@ -345,7 +609,6 @@ def generar_pdf_entrega(datos, logo_filename, nombre_archivo, firma_path=None, i
     print_multiline("Observaciones Generales", d6.get("Observaciones_Generales"))
     pdf.ln(8)
 
-    # FIRMAS
     if pdf.get_y() > 220: pdf.add_page()
     pdf.set_fill_color(15, 55, 105); pdf.set_text_color(255, 255, 255)
     pdf.set_font("Arial", "B", 10); pdf.cell(190, 8, "  6. FIRMAS DE RESPONSABILIDAD", border=0, ln=True, fill=True)
@@ -356,17 +619,16 @@ def generar_pdf_entrega(datos, logo_filename, nombre_archivo, firma_path=None, i
         pdf.image(firma_path, x=85, y=pdf.get_y()-22, w=40, h=18)
     pdf.set_font("Arial", "B", 9); pdf.cell(190, 8, f"Firma Piloto ROV Saliente: {piloto_saliente}", border=1, align="C", ln=True)
 
-    if imagenes_subidas:
+    if diccionario_fotos:
         pdf.add_page()
         pdf.set_font("Helvetica", 'B', 11)
         pdf.set_fill_color(15, 55, 105); pdf.set_text_color(255, 255, 255)
-        pdf.cell(190, 8, "  EVIDENCIA FOTOGRAFICA", border=0, ln=True, fill=True); pdf.ln(5)
+        pdf.cell(190, 8, "  EVIDENCIA FOTOGRAFICA ROVs", border=0, ln=True, fill=True); pdf.ln(5)
         pdf.set_text_color(0, 0, 0)
+        
         col_img = 0; row_y = pdf.get_y(); max_h_row = 0
-        for img_file in imagenes_subidas:
+        for titulo, img_file in diccionario_fotos.items():
             temp_path = f"temp_{uuid.uuid4().hex[:6]}.jpg"
-            
-            # OPTIMIZADOR DE RAM PARA ENTREGAS DE TURNO
             bytes_optimizados = optimizar_imagen_ram(img_file.getvalue())
             
             with open(temp_path, "wb") as f: 
@@ -374,14 +636,23 @@ def generar_pdf_entrega(datos, logo_filename, nombre_archivo, firma_path=None, i
                 
             with Image.open(temp_path) as pil_img:
                 w_px, h_px = pil_img.size; aspect = h_px / w_px
-                if aspect > (80 / 85): h_mm = 80; w_mm = 80 / aspect
+                if aspect > (80 / 85): h_mm = 75; w_mm = 75 / aspect
                 else: w_mm = 85; h_mm = 85 * aspect
-            if col_img == 2: col_img = 0; row_y += max_h_row + 10; max_h_row = 0
-            if row_y + 85 > 280: pdf.add_page(); row_y = pdf.get_y(); col_img = 0; max_h_row = 0
+                
+            if col_img == 2: col_img = 0; row_y += max_h_row + 15; max_h_row = 0
+            if row_y + 90 > 280: pdf.add_page(); row_y = pdf.get_y(); col_img = 0; max_h_row = 0
+            
             x_pos = 15 if col_img == 0 else 110
-            pdf.rect(x_pos - 1, row_y - 1, w_mm + 2, h_mm + 2)
-            pdf.image(temp_path, x=x_pos, y=row_y, w=w_mm, h=h_mm)
-            max_h_row = max(max_h_row, h_mm); col_img += 1
+            
+            pdf.set_xy(x_pos, row_y)
+            pdf.set_font("Arial", 'B', 8)
+            pdf.cell(w_mm, 5, titulo, border=0, align='C', ln=2)
+            
+            y_foto = pdf.get_y()
+            pdf.rect(x_pos - 1, y_foto - 1, w_mm + 2, h_mm + 2)
+            pdf.image(temp_path, x=x_pos, y=y_foto, w=w_mm, h=h_mm)
+            
+            max_h_row = max(max_h_row, h_mm + 5); col_img += 1
             os.remove(temp_path) 
         pdf.set_y(row_y + max_h_row + 10)
 
@@ -430,67 +701,89 @@ elif st.session_state.current_page == 'main_menu':
     st.markdown("<h1 style='text-align: center;'>Sistema de Gestión Operativa</h1>", unsafe_allow_html=True)
     st.write(f"Operador en turno: **{st.session_state.current_user}**")
     
-    if st.session_state.current_user == 'admin':
-        st.markdown("---")
-        st.subheader("📊 Panel de Control en Tiempo Real")
+    es_lunes = datetime.date.today().weekday() == 0
+    if es_lunes and not st.session_state.get('monday_alert_dismissed', False):
+        st.warning("📅 **Rotación Semanal de Equipos ROV (Día Lunes)**")
+        rov_actual_id = st.session_state.rov_activo
+        rov_standby_id = 2 if rov_actual_id == 1 else 1
         
-        try:
-            res_hpt = supabase.table('hpt_history').select('*').execute()
-            res_rd = supabase.table('reportes_history').select('*').execute()
-            df_hpt = pd.DataFrame(res_hpt.data)
-            df_rd = pd.DataFrame(res_rd.data)
-        except:
-            df_hpt = pd.DataFrame(st.session_state.local_hpt_history)
-            df_rd = pd.DataFrame(st.session_state.local_reportes_history)
-        
-        total_hpt = len(df_hpt) if not df_hpt.empty else 0
-        total_rd = len(df_rd) if not df_rd.empty else 0
-        total_reportes = total_hpt + total_rd
-        
-        hoy_str = str(datetime.date.today())
-        
-        hpt_hoy = df_hpt[df_hpt['fecha'] == hoy_str] if not df_hpt.empty and 'fecha' in df_hpt.columns else pd.DataFrame()
-        rd_hoy = df_rd[df_rd['fecha'] == hoy_str] if not df_rd.empty and 'fecha' in df_rd.columns else pd.DataFrame()
-        
-        reportes_hoy_total = len(hpt_hoy) + len(rd_hoy)
-        pilotos_activos = [k for k in st.session_state.db_usuarios.keys() if k != 'admin'] 
-        
-        pilotos_con_hpt = hpt_hoy['usuario'].unique().tolist() if not hpt_hoy.empty else []
-        pilotos_con_rd = rd_hoy['usuario'].unique().tolist() if not rd_hoy.empty else []
-        
-        pendientes_hpt = [p for p in pilotos_activos if p not in pilotos_con_hpt]
-        pendientes_rd = [p for p in pilotos_activos if p not in pilotos_con_rd]
-        
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Reportes Totales (Históricos)", total_reportes)
-        m2.metric("Reportes Enviados Hoy", reportes_hoy_total)
-        m3.metric("Pilotos Operativos Plataforma", len(pilotos_activos))
-        
-        st.markdown("**Estado de Reportabilidad del Día:**")
-        col_p1, col_p2 = st.columns(2)
-        with col_p1:
-            if pendientes_hpt:
-                st.warning(f"⚠️ **HPT Pendientes:** {', '.join(pendientes_hpt)}")
-            else:
-                st.success("✅ Todas las HPT del día enviadas.")
-        with col_p2:
-            if pendientes_rd:
-                st.warning(f"⚠️ **Reportes Diarios Pendientes:** {', '.join(pendientes_rd)}")
-            else:
-                st.success("✅ Todos los Reportes Diarios enviados.")
+        st.write(f"Es hora de cambiar al equipo {rov_standby_id}. ¿Deseas realizar el cambio ahora?")
+        col_y, col_n = st.columns(2)
+        with col_y:
+            if st.button("SÍ, Cambiar Equipo", type="primary", use_container_width=True):
+                st.session_state.rov_activo = rov_standby_id
+                st.session_state.monday_alert_dismissed = True
+                st.success(f"✅ Equipo cambiado exitosamente. Por favor, realizar mantención preventiva al ROV {rov_actual_id}.")
+                time.sleep(3)
+                st.rerun()
+        with col_n:
+            if st.button("NO, Mantener Equipo", use_container_width=True):
+                st.session_state.monday_alert_dismissed = True
+                st.rerun()
                 
-        hora_chile = (datetime.datetime.utcnow() - datetime.timedelta(hours=4)).time()
-        limite_hpt = datetime.time(9, 30)
-        limite_rd = datetime.time(20, 0)
-        
-        if hora_chile > limite_hpt and pendientes_hpt:
-            st.error("🚨 **ALERTA CRÍTICA:** Son pasadas las 09:30 AM y existen HPT pendientes por envío.")
-        
-        if hora_chile > limite_rd and pendientes_rd:
-            st.error("🚨 **ALERTA CRÍTICA:** Son pasadas las 20:00 Hrs y existen Reportes Diarios pendientes por envío.")
+    st.markdown("---")
+    
+    if st.session_state.current_user == 'admin':
+        with st.container(border=True):
+            st.subheader("📊 Panel de Control en Tiempo Real")
             
+            try:
+                res_hpt = supabase.table('hpt_history').select('*').execute()
+                res_rd = supabase.table('reportes_history').select('*').execute()
+                df_hpt = pd.DataFrame(res_hpt.data)
+                df_rd = pd.DataFrame(res_rd.data)
+            except:
+                df_hpt = pd.DataFrame(st.session_state.local_hpt_history)
+                df_rd = pd.DataFrame(st.session_state.local_reportes_history)
+            
+            total_hpt = len(df_hpt) if not df_hpt.empty else 0
+            total_rd = len(df_rd) if not df_rd.empty else 0
+            total_reportes = total_hpt + total_rd
+            
+            hoy_str = str(datetime.date.today())
+            
+            hpt_hoy = df_hpt[df_hpt['fecha'] == hoy_str] if not df_hpt.empty and 'fecha' in df_hpt.columns else pd.DataFrame()
+            rd_hoy = df_rd[df_rd['fecha'] == hoy_str] if not df_rd.empty and 'fecha' in df_rd.columns else pd.DataFrame()
+            
+            reportes_hoy_total = len(hpt_hoy) + len(rd_hoy)
+            pilotos_activos = [k for k in st.session_state.db_usuarios.keys() if k != 'admin'] 
+            
+            pilotos_con_hpt = hpt_hoy['usuario'].unique().tolist() if not hpt_hoy.empty else []
+            pilotos_con_rd = rd_hoy['usuario'].unique().tolist() if not rd_hoy.empty else []
+            
+            pendientes_hpt = [p for p in pilotos_activos if p not in pilotos_con_hpt]
+            pendientes_rd = [p for p in pilotos_activos if p not in pilotos_con_rd]
+            
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Reportes Totales (Históricos)", total_reportes)
+            m2.metric("Reportes Enviados Hoy", reportes_hoy_total)
+            m3.metric("Pilotos Operativos Plataforma", len(pilotos_activos))
+            
+            st.markdown("**Estado de Reportabilidad del Día:**")
+            col_p1, col_p2 = st.columns(2)
+            with col_p1:
+                if pendientes_hpt:
+                    st.warning(f"⚠️ **HPT Pendientes:** {', '.join(pendientes_hpt)}")
+                else:
+                    st.success("✅ Todas las HPT del día enviadas.")
+            with col_p2:
+                if pendientes_rd:
+                    st.warning(f"⚠️ **Reportes Diarios Pendientes:** {', '.join(pendientes_rd)}")
+                else:
+                    st.success("✅ Todos los Reportes Diarios enviados.")
+                    
+            hora_chile = (datetime.datetime.utcnow() - datetime.timedelta(hours=4)).time()
+            limite_hpt = datetime.time(9, 30)
+            limite_rd = datetime.time(20, 0)
+            
+            if hora_chile > limite_hpt and pendientes_hpt:
+                st.error("🚨 **ALERTA CRÍTICA:** Son pasadas las 09:30 AM y existen HPT pendientes por envío.")
+            
+            if hora_chile > limite_rd and pendientes_rd:
+                st.error("🚨 **ALERTA CRÍTICA:** Son pasadas las 20:00 Hrs y existen Reportes Diarios pendientes por envío.")
+                
         with st.expander("⚙️ Gestión de Plataforma (Configuración Admin)", expanded=False):
-            tab_pilotos, tab_centros = st.tabs(["👨‍✈️ Pilotos", "⚓ Centros de Cultivo"])
+            tab_pilotos, tab_centros, tab_rovs, tab_historial_rovs = st.tabs(["👨‍✈️ Pilotos", "⚓ Centros de Cultivo", "🤖 Equipos ROV", "🛠️ Historial Mantenciones ROV"])
             
             with tab_pilotos:
                 st.write("**Añadir o Actualizar Piloto**")
@@ -549,6 +842,34 @@ elif st.session_state.current_page == 'main_menu':
                             st.rerun()
                 else:
                     st.info("No hay centros registrados para eliminar.")
+                    
+            with tab_rovs:
+                st.write("**Añadir Nuevo Equipo ROV (Externo)**")
+                with st.form("form_add_rov", clear_on_submit=True):
+                    r_c1, r_c2 = st.columns(2)
+                    with r_c1: 
+                        new_rov_name = st.text_input("Nombre / Identificador (Ej: ROV 3)")
+                        new_rov_serie = st.text_input("N° Serie ROV")
+                    with r_c2:
+                        new_ctrl_serie = st.text_input("N° Serie Controlador")
+                        new_mantencion = st.date_input("Fecha Última Mantención")
+                    if st.form_submit_button("Registrar Equipo ROV"):
+                        new_id = len(st.session_state.db_rovs) + 1
+                        st.session_state.db_rovs[new_id] = {
+                            "nombre": new_rov_name,
+                            "serie_rov": new_rov_serie,
+                            "serie_ctrl": new_ctrl_serie,
+                            "mantencion": new_mantencion
+                        }
+                        st.success(f"Equipo {new_rov_name} registrado exitosamente.")
+
+            with tab_historial_rovs:
+                st.write("**Historial de Mantenciones Declaradas en Terreno**")
+                if st.session_state.historial_mantenciones:
+                    df_mantenciones = pd.DataFrame(st.session_state.historial_mantenciones)
+                    st.dataframe(df_mantenciones, use_container_width=True)
+                else:
+                    st.info("Aún no se han registrado actualizaciones de mantención desde el terreno.")
 
     st.divider()
     c1, c2 = st.columns(2)
@@ -558,7 +879,13 @@ elif st.session_state.current_page == 'main_menu':
         if st.button("📈 GRÁFICOS GERENCIALES", use_container_width=True): set_page('panel_graficos'); st.rerun()
     with c2:
         if st.button("🚢 REPORTE DIARIO", use_container_width=True): set_page('reporte_diario'); st.rerun()
-        if st.button("📊 HISTORIAL / AUDITORÍA", use_container_width=True): set_page('modulo_busqueda'); st.rerun()
+        if st.button("📑 INFORME CONSOLIDADO (PDF/Excel)", use_container_width=True): set_page('informe_consolidado'); st.rerun()
+        if st.button("✉️ REPORTE CORREO", use_container_width=True): set_page('reporte_correo'); st.rerun()
+        
+    st.markdown("<br>", unsafe_allow_html=True)
+    c_btn1, c_btn2, c_btn3 = st.columns([1, 2, 1])
+    with c_btn2:
+        if st.button("📊 HISTORIAL / AUDITORÍA COMPLETA", use_container_width=True): set_page('modulo_busqueda'); st.rerun()
         if st.button("🔒 Cerrar Sesión", use_container_width=True):
             st.session_state.logged_in = False
             st.session_state.current_user = ""
@@ -566,6 +893,324 @@ elif st.session_state.current_page == 'main_menu':
             st.session_state.admin_acceso_graficos = False
             set_page('login')
             st.rerun()
+
+elif st.session_state.current_page == 'informe_consolidado':
+    st.button("⬅️ Volver al Menú Principal", on_click=set_page, args=('main_menu',))
+    st.markdown("<h1 style='text-align: center;'>📑 Informe Consolidado Operativo (PDF Detallado)</h1>", unsafe_allow_html=True)
+    st.info("Este módulo genera el archivo PDF formal con la planimetría y el registro fotográfico (estilo InDesign), además del Excel semanal de respaldo.")
+    st.divider()
+
+    if 'historial_excel_semanal' not in st.session_state:
+        st.session_state.historial_excel_semanal = pd.DataFrame(columns=[
+            "Fecha", "Semana", "Jaula", "Centro", "Tipo Red", "Anomalia", "Ubicacion", "Profundidad", "Estado"
+        ])
+
+    tab1, tab2, tab3 = st.tabs(["1️⃣ Contexto y Operativa", "2️⃣ Registro de Anomalías (Fotos)", "3️⃣ Compilar PDF y Texto Correo"])
+
+    with tab1:
+        st.subheader("Datos de la Inspección")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            ic_cliente = st.selectbox("Empresa / Cliente", ["Salmones Blumar", "Salmones Blumar Magallanes", "Otra Empresa"], key="ic_cl")
+            opciones_centros = list(st.session_state.db_centros_areas.keys())
+            ic_centro = st.selectbox("Centro de Cultivo", opciones_centros, key="ic_ce")
+            ic_fecha = st.date_input("Fecha de Inspección", value=datetime.date.today(), key="ic_fe")
+        with c2:
+            ic_encargado = st.text_input("Asistente/Encargado de Centro", value=st.session_state.ic_data.get("encargado", ""), key="ic_en")
+            ic_piloto = st.text_input("Piloto ROV", value=st.session_state.current_user, key="ic_pi")
+            ic_equipo = st.selectbox("Equipo ROV Utilizado", ["Deep Trekker DTG3", "MC Petrohue", "Chasing Promax", "Fifish vs xpert"], key="ic_eq")
+        with c3:
+            ic_disponibilidad = st.selectbox("Disponibilidad", ["Disponible", "Enfermo", "Licencia Médica", "No disponible"], key="ic_di")
+            ic_ingreso = st.date_input("Fecha último ingreso", key="ic_in")
+            ic_proximo = st.date_input("Fecha próximo ingreso", key="ic_pr")
+            
+        c4, c5, c6 = st.columns(3)
+        with c4:
+            ic_dias_cerrado = st.number_input("Días puerto cerrado", min_value=0, value=0, key="ic_dc")
+            ic_dias_fallas = st.number_input("Días fallas ROV", min_value=0, value=0, key="ic_df")
+        with c5:
+            ic_backup = st.radio("Backup Operativo", ["SI", "NO"], horizontal=True, key="ic_bk")
+            ic_graber = st.radio("Graber Operativo", ["SI", "NO"], horizontal=True, key="ic_gr")
+        with c6:
+            ic_planimetria = st.file_uploader("📸 Subir Esquema/Planimetría del Centro", type=['jpg', 'jpeg', 'png'], key="ic_pl")
+
+        st.subheader("Actividades Diarias")
+        col_act1, col_act2 = st.columns(2)
+        with col_act1:
+            ic_act_am = st.text_area("Actividad AM", placeholder="Ej: INSPECCIÓN PECERA J101...", key="ic_aam")
+        with col_act2:
+            ic_act_pm = st.text_area("Actividad PM", placeholder="Ej: EXTRACCIÓN MORTALIDAD J101...", key="ic_apm")
+            
+        if st.button("Guardar Datos Generales", type="primary", key="ic_save"):
+            dias_trabajados = (datetime.date.today() - ic_ingreso).days + 1
+            if dias_trabajados < 1: dias_trabajados = 1
+                
+            st.session_state.ic_data.update({
+                "cliente": ic_cliente, "centro": ic_centro, "fecha": ic_fecha,
+                "encargado": ic_encargado, "piloto": ic_piloto, "equipo": ic_equipo,
+                "disponibilidad": ic_disponibilidad, "ingreso": ic_ingreso, "proximo": ic_proximo,
+                "dias_trabajados": dias_trabajados, "dias_cerrado": ic_dias_cerrado, "dias_fallas": ic_dias_fallas,
+                "backup": ic_backup, "graber": ic_graber, "actividad_am": ic_act_am, "actividad_pm": ic_act_pm,
+                "planimetria": ic_planimetria.getvalue() if ic_planimetria else st.session_state.ic_data.get("planimetria")
+            })
+            st.success("✅ Datos operativos guardados exitosamente. Pasa a la pestaña 2.")
+
+    with tab2:
+        st.subheader("Registro Dinámico de Roturas/Anomalías")
+        st.write("Agrega aquí cada hallazgo para armar la matriz y la grilla de fotos automáticamente.")
+        with st.form("form_anomalia", clear_on_submit=True):
+            col_a1, col_a2 = st.columns(2)
+            with col_a1:
+                jaula = st.text_input("N° de Jaula (Ej: 101, 102)")
+                tipo_red = st.selectbox("Tipo de Red", ["Lobera", "Pecera", "Pajarera"])
+                desc = st.text_area("Descripción de la Anomalía (Ej: Rotura 2x1 cuadros)")
+            with col_a2:
+                ubicacion = st.text_input("Ubicación (Ej: Lateral Este, Fondo, Cabecera)")
+                profundidad = st.number_input("Profundidad (metros)", min_value=0.0, step=0.1)
+                estado = st.selectbox("Estado", ["Reparada", "Pendiente"])
+                
+            st.markdown("**Evidencia Fotográfica**")
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                foto_antes = st.file_uploader("Foto Antes (Rotura/Hallazgo)", type=['jpg', 'jpeg', 'png'], key="ic_f1")
+            with col_f2:
+                foto_despues = st.file_uploader("Foto Después (Reparación)", type=['jpg', 'jpeg', 'png'], key="ic_f2")
+                
+            if st.form_submit_button("➕ Agregar a la Matriz", use_container_width=True):
+                if not jaula or not desc:
+                    st.error("⚠️ La Jaula y la Descripción son obligatorias.")
+                else:
+                    nueva_anomalia = {
+                        "id": str(uuid.uuid4())[:6], "jaula": jaula, "tipo_red": tipo_red,
+                        "descripcion": desc, "ubicacion": ubicacion, "profundidad": profundidad,
+                        "estado": estado, "foto_rotura": foto_antes.getvalue() if foto_antes else None,
+                        "foto_reparacion": foto_despues.getvalue() if foto_despues else None
+                    }
+                    st.session_state.anomalias.append(nueva_anomalia)
+                    
+                    semana_actual = datetime.date.today().isocalendar()[1]
+                    nueva_fila = pd.DataFrame([{
+                        "Fecha": datetime.date.today(), "Semana": semana_actual, "Jaula": jaula,
+                        "Centro": st.session_state.ic_data.get("centro", "N/A"), "Tipo Red": tipo_red,
+                        "Anomalia": desc, "Ubicacion": ubicacion, "Profundidad": profundidad, "Estado": estado
+                    }])
+                    st.session_state.historial_excel_semanal = pd.concat([st.session_state.historial_excel_semanal, nueva_fila], ignore_index=True)
+                    st.success(f"✅ Registrado exitosamente en Jaula {jaula}.")
+        
+        st.markdown("---")
+        st.markdown(f"### Anomalías en Memoria para el Reporte de Hoy ({len(st.session_state.anomalias)})")
+        if not st.session_state.anomalias:
+            st.info("No hay anomalías registradas hoy.")
+        else:
+            for i, an in enumerate(st.session_state.anomalias):
+                with st.container(border=True):
+                    c_an1, c_an2 = st.columns([5, 1])
+                    with c_an1:
+                        st.markdown(f"**Jaula {an['jaula']} ({an['tipo_red']}) - {an['estado']}**")
+                        st.write(f"{an['descripcion']} | Prof: {an['profundidad']}m | Ubicación: {an['ubicacion']}")
+                    with c_an2:
+                        if st.button("❌", key=f"del_{an['id']}", use_container_width=True):
+                            st.session_state.anomalias.pop(i)
+                            st.rerun()
+
+    with tab3:
+        st.subheader("Paso Final: Compilación")
+        ic_observaciones = st.text_area("Observaciones Generales de la Inspección", placeholder="Resumen final para la matriz y el correo...", height=100, key="ic_obs")
+        
+        col_gen1, col_gen2 = st.columns(2)
+        with col_gen1:
+            if st.button("📥 1. GENERAR INFORME DETALLADO (PDF)", type="primary", use_container_width=True, key="btn_pdf_ic"):
+                if not st.session_state.ic_data:
+                    st.error("⚠️ Guarde los datos de contexto en la Pestaña 1 primero.")
+                else:
+                    st.session_state.ic_data["observaciones"] = ic_observaciones
+                    with st.spinner("Compilando arquitectura del PDF estilo InDesign..."):
+                        nombre_pdf = f"INFORME_DIARIO_{st.session_state.ic_data.get('centro','').replace(' ', '')}_{st.session_state.ic_data.get('fecha')}.pdf"
+                        try:
+                            logo_path = obtener_ruta_logo()
+                            rov_cover = "rov_cover.jpg" if os.path.exists("rov_cover.jpg") else None
+                            
+                            pdf_generado = generar_pdf_consolidado(
+                                datos=st.session_state.ic_data, 
+                                anomalias=st.session_state.anomalias, 
+                                logo_filename=logo_path, 
+                                rov_cover=rov_cover, 
+                                nombre_archivo=nombre_pdf
+                            )
+                            st.session_state.ic_pdf_generado = pdf_generado
+                            st.success("✅ PDF Generado con Éxito.")
+                        except Exception as e:
+                            st.error(f"Falla técnica al generar el PDF: {str(e)}")
+                            
+            if st.session_state.get("ic_pdf_generado") and os.path.exists(st.session_state.ic_pdf_generado):
+                with open(st.session_state.ic_pdf_generado, "rb") as f:
+                    st.download_button("Descargar Informe PDF", data=f, file_name=st.session_state.ic_pdf_generado, mime="application/pdf", use_container_width=True, key="dl_pdf_ic")
+
+        with col_gen2:
+            if st.button("✉️ 2. GENERAR TEXTO PARA CORREO (Copiar/Pegar)", use_container_width=True, key="btn_txt_ic"):
+                if not st.session_state.ic_data:
+                    st.error("Faltan datos de contexto en Pestaña 1.")
+                else:
+                    data = st.session_state.ic_data
+                    texto_correo = f"""CENTRO
+ {data.get('centro', '')}
+
+NOMBRE ASISTENTE/ J.CENTRO
+ {data.get('encargado', '')}
+
+NOMBRE OPERADOR
+ {data.get('piloto', '')}
+
+DISPONIBLE
+ {data.get('disponibilidad', '')}
+
+FECHA ULTIMO INGRESO
+ {data.get('ingreso', datetime.date.today()).strftime('%d-%m-%Y')}
+
+FECHA PROXIMO INGRESO
+ {data.get('proximo', datetime.date.today()).strftime('%d-%m-%Y')}
+
+DIAS TRABAJADOS CENTRO
+ {data.get('dias_trabajados', 1)}
+
+DIAS PUERTO CERRADO
+ {data.get('dias_cerrado', 0)}
+
+DIAS FALLAS ROV
+ {data.get('dias_fallas', 0)}
+
+BACKUP OPERATIVO
+ {data.get('backup', '')}
+
+GRABER OPERATIVO
+ {data.get('graber', '')}
+
+ACTIVIDAD AM
+ {data.get('actividad_am', '')}
+
+ACTIVIDAD PM
+ {data.get('actividad_pm', '')}
+
+OBSERVACIONES
+ {ic_observaciones}
+"""
+                    st.code(texto_correo, language='text')
+
+elif st.session_state.current_page == 'reporte_correo':
+    st.button("⬅️ Volver al Menú Principal", on_click=set_page, args=('main_menu',))
+    st.markdown("<h1 style='text-align: center;'>Generador de Reporte para Correo</h1>", unsafe_allow_html=True)
+    st.divider()
+
+    with st.form("form_reporte_correo"):
+        st.subheader("Datos de la Jornada")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            opciones_centros = list(st.session_state.db_centros_areas.keys())
+            centro = st.selectbox("Centro", opciones_centros)
+            nombre_jefe = st.text_input("Nombre Asistente/J.Centro")
+            nombre_operador = st.text_input("Nombre Operador (Piloto ROV)", value=st.session_state.current_user)
+            disponibilidad = st.selectbox("Estado de Disponibilidad", ["Disponible", "No disponible", "Licencia médica", "Enfermo"])
+            
+        with col2:
+            fecha_ingreso = st.date_input("Fecha último ingreso (Inicio de turno)")
+            fecha_proximo = st.date_input("Fecha próximo ingreso (Próximo turno)")
+            dias_cerrado = st.number_input("Días puerto cerrado", min_value=0, value=0)
+            dias_fallas = st.number_input("Días fallas ROV", min_value=0, value=0)
+            
+        col3, col4 = st.columns(2)
+        with col3:
+            backup = st.radio("¿Backup Operativo?", ["SI", "NO"], horizontal=True)
+        with col4:
+            graber = st.radio("¿Graber Operativo?", ["SI", "NO"], horizontal=True)
+            
+        st.subheader("Resumen de Actividades")
+        actividad_am = st.text_area("Actividad AM", placeholder="Ej: INSPECCIÓN PECERA J101-J102...")
+        actividad_pm = st.text_area("Actividad PM", placeholder="Ej: EXTRACCIÓN MORTALIDAD J101...")
+        observaciones = st.text_area("Observaciones", placeholder="Ej: SE ENCUENTRA ROTURA PECERA J102, 4X2...")
+        
+        submit_correo = st.form_submit_button("GENERAR TEXTO PARA CORREO", use_container_width=True)
+
+    if submit_correo:
+        dias_trabajados = (datetime.date.today() - fecha_ingreso).days + 1
+        if dias_trabajados < 1:
+            dias_trabajados = 1
+
+        texto_correo = f"""CENTRO
+ {centro}
+
+NOMBRE ASISTENTE/ J.CENTRO
+ {nombre_jefe}
+
+NOMBRE OPERADOR
+ {nombre_operador}
+
+DISPONIBLE
+ {disponibilidad}
+
+FECHA ULTIMO INGRESO
+ {fecha_ingreso.strftime('%d-%m-%Y')}
+
+FECHA PROXIMO INGRESO
+ {fecha_proximo.strftime('%d-%m-%Y')}
+
+DIAS TRABAJADOS CENTRO
+ {dias_trabajados}
+
+DIAS PUERTO CERRADO
+ {dias_cerrado}
+
+DIAS FALLAS ROV
+ {dias_fallas}
+
+BACKUP OPERATIVO
+ {backup}
+
+GRABER OPERATIVO
+ {graber}
+
+ACTIVIDAD AM
+ {actividad_am}
+
+ACTIVIDAD PM
+ {actividad_pm}
+
+OBSERVACIONES
+ {observaciones}
+"""
+        
+        datos_guardados = {
+            "Fecha": datetime.date.today(), "Centro": centro, "Asistente/J.Centro": nombre_jefe,
+            "Operador": nombre_operador, "Disponibilidad": disponibilidad, "Ingreso": fecha_ingreso,
+            "Dias Trabajados": dias_trabajados, "Dias P. Cerrado": dias_cerrado, "Dias Fallas": dias_fallas,
+            "Backup": backup, "Graber": graber, "Actividad AM": actividad_am, "Actividad PM": actividad_pm,
+            "Observaciones": observaciones
+        }
+        st.session_state.historial_reportes_correo.append(datos_guardados)
+        st.success("✅ ¡Texto generado exitosamente! Haz clic en el botón de la esquina superior derecha del cuadro gris para copiarlo.")
+        st.code(texto_correo, language='text')
+        
+    st.divider()
+    st.subheader("Acciones de Fin de Semana")
+    if st.session_state.historial_reportes_correo:
+        df_correo = pd.DataFrame(st.session_state.historial_reportes_correo)
+        buffer_correo = io.BytesIO()
+        with pd.ExcelWriter(buffer_correo, engine='xlsxwriter') as writer:
+            df_correo.to_excel(writer, index=False, sheet_name='Actividades Diarias')
+        
+        st.download_button(
+            label="📊 DESCARGAR CONSOLIDADO SEMANAL (EXCEL)", 
+            data=buffer_correo.getvalue(), 
+            file_name=f"Consolidado_Actividades_{datetime.date.today()}.xlsx", 
+            mime="application/vnd.ms-excel",
+            use_container_width=True
+        )
+        
+        if st.button("🧹 Limpiar registros (Usar el lunes)", use_container_width=True):
+            st.session_state.historial_reportes_correo = []
+            st.rerun()
+    else:
+        st.warning("No hay registros diarios guardados para generar el Excel esta semana.")
 
 elif st.session_state.current_page == 'hpt_menu':
     st.button("⬅️ Volver al Menú Principal", on_click=set_page, args=('main_menu',))
@@ -582,7 +1227,7 @@ elif st.session_state.current_page == 'hpt_menu':
             "trabajo_rutinario": "Sí",
             "epp": [False]*7, "faena": "Inspeccion Red pecera", "erc": [False]*6, "tc_duracion": "15 minutos",
             "check_instruido": "Sí", "check_clima": "Sí", "check_equipos": "Sí", "check_orden": "Sí",
-            "evidencia_puerto": None
+            "evidencia_puerto": None, "prevencion_1": "", "prevencion_2": ""
         }
         set_page('hpt_nuevo')
         st.rerun()
@@ -631,8 +1276,8 @@ elif st.session_state.current_page == 'hpt_nuevo':
         
         st.markdown("🔒 **Asesores de Prevención y Operaciones**")
         col3, col4 = st.columns(2)
-        with col3: st.text_input("Prevención 1", value=CORREOS_PREVENCION[0], disabled=True)
-        with col4: st.text_input("Prevención 2", value=CORREOS_PREVENCION[1], disabled=True)
+        with col3: prev_1 = st.text_input("Prevención 1", value=st.session_state.hpt_data.get("prevencion_1", ""))
+        with col4: prev_2 = st.text_input("Prevención 2", value=st.session_state.hpt_data.get("prevencion_2", ""))
             
         opciones_faena = ["Inspeccion Red Lobera", "Inspeccion Red pecera", "Inspeccion Tensores", "Recuperacion inorganico", "Apoyo Centro de cultivo", "Extraccion de mortalidad", "Mantencion equipos", "Sin faena"]
         
@@ -652,7 +1297,8 @@ elif st.session_state.current_page == 'hpt_nuevo':
                 "centro": centro, "area": area_asignada, "correo": correo, "encargado": encargado, "ponton": ponton, 
                 "condicion_puerto": condicion_puerto, "faena": faena, "tarea": tarea, 
                 "trabajo_rutinario": trabajo_rutinario,
-                "evidencia_puerto": img_bytes
+                "evidencia_puerto": img_bytes,
+                "prevencion_1": prev_1, "prevencion_2": prev_2
             })
             if condicion_puerto == "Cerrado total":
                 set_step(4) 
@@ -755,10 +1401,10 @@ elif st.session_state.current_page == 'hpt_nuevo':
             col_f1, col_f2 = st.columns(2)
             with col_f1:
                 st.write("Firma Supervisor Servicio (Piloto)")
-                firma_sup_serv = st_canvas(stroke_width=2, stroke_color="#000", background_color="#FFF", height=150, width=300, key="firma_serv")
+                firma_sup_serv = st_canvas(stroke_width=2, stroke_color="#000", background_color="#FFF", height=150, width=300, key="firma_serv", return_image_data=True)
             with col_f2:
                 st.write("Firma Encargado de Centro")
-                firma_encargado = st_canvas(stroke_width=2, stroke_color="#000", background_color="#FFF", height=150, width=300, key="firma_encargado")
+                firma_encargado = st_canvas(stroke_width=2, stroke_color="#000", background_color="#FFF", height=150, width=300, key="firma_encargado", return_image_data=True)
 
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
@@ -770,7 +1416,7 @@ elif st.session_state.current_page == 'hpt_nuevo':
                 st.rerun()
                 
         with col_btn2:
-            if st.button("GENERAR Y ENVIAR HPT", type="primary", use_container_width=True):
+            if st.button("GENERAR Y ALMACENAR HPT", type="primary", use_container_width=True):
                 data = st.session_state.hpt_data
                 barra_carga = st.progress(0, text="⚙️ Generando PDF...")
                 
@@ -796,7 +1442,7 @@ elif st.session_state.current_page == 'hpt_nuevo':
 
                     pdf.set_fill_color(15, 55, 105); pdf.set_text_color(255, 255, 255)
                     pdf.set_font("Arial", "B", 9); pdf.cell(190, 6, "1. DATOS OPERATIVOS", border=0, ln=True, fill=True)
-                    pdf.ln(1) # Respiro visual
+                    pdf.ln(1)
                     pdf.set_text_color(0, 0, 0)
                     
                     pdf.set_font("Arial", "B", 8); pdf.cell(35, 6, "Empresa / Mandante:", border=1); pdf.set_font("Arial", "", 8); pdf.cell(60, 6, data.get('empresa', '')[:35], border=1)
@@ -809,15 +1455,15 @@ elif st.session_state.current_page == 'hpt_nuevo':
                     pdf.set_font("Arial", "B", 8); pdf.cell(35, 6, "Condicion Puerto:", border=1); pdf.set_font("Arial", "", 8); pdf.cell(60, 6, data.get('condicion_puerto', '')[:35], border=1, ln=True)
                     pdf.set_font("Arial", "B", 8); pdf.cell(35, 6, "Encargado Centro:", border=1); pdf.set_font("Arial", "", 8); pdf.cell(60, 6, data.get('encargado', '')[:35], border=1)
                     pdf.set_font("Arial", "B", 8); pdf.cell(35, 6, "Correo Centro:", border=1); pdf.set_font("Arial", "", 8); pdf.cell(60, 6, data.get('correo', '')[:35], border=1, ln=True)
-                    pdf.set_font("Arial", "B", 8); pdf.cell(35, 6, "Prevencionista 1:", border=1); pdf.set_font("Arial", "", 8); pdf.cell(60, 6, CORREOS_PREVENCION[0], border=1)
-                    pdf.set_font("Arial", "B", 8); pdf.cell(35, 6, "Prevencionista 2:", border=1); pdf.set_font("Arial", "", 8); pdf.cell(60, 6, CORREOS_PREVENCION[1], border=1, ln=True)
+                    pdf.set_font("Arial", "B", 8); pdf.cell(35, 6, "Prevencionista 1:", border=1); pdf.set_font("Arial", "", 8); pdf.cell(60, 6, data.get('prevencion_1', ''), border=1)
+                    pdf.set_font("Arial", "B", 8); pdf.cell(35, 6, "Prevencionista 2:", border=1); pdf.set_font("Arial", "", 8); pdf.cell(60, 6, data.get('prevencion_2', ''), border=1, ln=True)
                     
                     pdf.set_font("Arial", "B", 8); pdf.cell(35, 6, "Trabajo Rutinario:", border=1); pdf.set_font("Arial", "", 8); pdf.cell(155, 6, data.get('trabajo_rutinario', 'Sí'), border=1, ln=True)
 
                     pdf.set_font("Arial", "B", 8)
                     pdf.set_fill_color(15, 55, 105); pdf.set_text_color(255, 255, 255)
                     pdf.cell(190, 6, "Faena Primaria y Detalles Especificos:", border=0, ln=True, fill=True)
-                    pdf.ln(1) # Respiro visual
+                    pdf.ln(1)
                     pdf.set_text_color(0, 0, 0)
                     pdf.set_font("Arial", "", 8)
                     texto_tarea = f"FAENA: {data.get('faena', '')}\nDETALLES: {data.get('tarea', '')}"
@@ -826,7 +1472,7 @@ elif st.session_state.current_page == 'hpt_nuevo':
                     pdf.ln(2)
                     pdf.set_fill_color(15, 55, 105); pdf.set_text_color(255, 255, 255)
                     pdf.set_font("Arial", "B", 9); pdf.cell(190, 6, "2. EQUIPO DE PROTECCION PERSONAL SELECCIONADO", border=0, ln=True, fill=True)
-                    pdf.ln(1) # Respiro visual
+                    pdf.ln(1)
                     pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", "", 8)
                     epp_labels = ["Guantes", "Chaleco", "Zapatos", "Ropa Termica", "Traje Agua", "Comunicacion", "Botiquin"]
                     epp_vals = data.get('epp', []); epp_seleccionados = [epp_labels[i] for i in range(len(epp_labels)) if i < len(epp_vals) and epp_vals[i]]
@@ -837,7 +1483,7 @@ elif st.session_state.current_page == 'hpt_nuevo':
                     pdf.ln(2)
                     pdf.set_fill_color(15, 55, 105); pdf.set_text_color(255, 255, 255)
                     pdf.set_font("Arial", "B", 9); pdf.cell(190, 6, "3. VERIFICACIONES CLAVES DE SEGURIDAD", border=0, ln=True, fill=True)
-                    pdf.ln(1) # Respiro visual
+                    pdf.ln(1)
                     pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", "", 8)
                     
                     def print_check(pregunta, respuesta):
@@ -852,7 +1498,7 @@ elif st.session_state.current_page == 'hpt_nuevo':
                     pdf.ln(2)
                     pdf.set_fill_color(15, 55, 105); pdf.set_text_color(255, 255, 255)
                     pdf.set_font("Arial", "B", 9); pdf.cell(190, 6, "4. RIESGOS CRITICOS EVALUADOS (ERC)", border=0, ln=True, fill=True)
-                    pdf.ln(1) # Respiro visual
+                    pdf.ln(1)
                     pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", "", 8)
                     erc_labels = ["Izaje", "Buceo", "Eq. Electricos", "Caidas", "Navegacion", "Atrapamiento"]
                     erc_vals = data.get('erc', []); erc_seleccionados = [erc_labels[i] for i in range(len(erc_labels)) if i < len(erc_vals) and erc_vals[i]]
@@ -863,7 +1509,7 @@ elif st.session_state.current_page == 'hpt_nuevo':
                     pdf.ln(2)
                     pdf.set_fill_color(15, 55, 105); pdf.set_text_color(255, 255, 255)
                     pdf.set_font("Arial", "B", 9); pdf.cell(190, 6, "5. DIFUSION Y TOMA DE CONOCIMIENTO", border=0, ln=True, fill=True)
-                    pdf.ln(1) # Respiro visual
+                    pdf.ln(1)
                     pdf.set_text_color(0, 0, 0)
                     pdf.set_font("Arial", "B", 8); pdf.cell(35, 6, "Relator / Piloto:", border=1); pdf.set_font("Arial", "", 8); pdf.cell(60, 6, tc_relator[:35], border=1)
                     pdf.set_font("Arial", "B", 8); pdf.cell(35, 6, "RUT Relator:", border=1); pdf.set_font("Arial", "", 8); pdf.cell(60, 6, tc_rut[:20], border=1, ln=True)
@@ -874,7 +1520,7 @@ elif st.session_state.current_page == 'hpt_nuevo':
                     pdf.ln(2)
                     pdf.set_fill_color(15, 55, 105); pdf.set_text_color(255, 255, 255)
                     pdf.set_font("Arial", "B", 9); pdf.cell(190, 6, "6. CUADRO DE FIRMAS RESPONSABLES", border=0, ln=True, fill=True)
-                    pdf.ln(1) # Respiro visual
+                    pdf.ln(1)
                     pdf.set_text_color(0, 0, 0)
                     pdf.cell(95, 22, "", border=1); pdf.cell(95, 22, "", border=1, ln=True)
                     id_firmas = uuid.uuid4().hex[:8]; f_serv = f"f_serv_{id_firmas}.jpg"; f_enc = f"f_encargado_{id_firmas}.jpg"
@@ -893,7 +1539,6 @@ elif st.session_state.current_page == 'hpt_nuevo':
                         
                         temp_img_path = f"temp_evidencia_{uuid.uuid4().hex[:6]}.jpg"
                         
-                        # OPTIMIZADOR DE RAM PARA EVIDENCIA HPT
                         bytes_optimizados_hpt = optimizar_imagen_ram(data['evidencia_puerto'])
                         
                         with open(temp_img_path, "wb") as f:
@@ -949,48 +1594,6 @@ elif st.session_state.current_page == 'hpt_nuevo':
                     try: supabase.table('hpt_history').insert(row_data).execute()
                     except Exception as db_err: st.error(f"⚠️ Error al guardar en BD: {db_err}"); st.session_state.local_hpt_history.append(row_data)
 
-                    barra_carga.progress(60, text="📧 Enviando PDF...")
-                    try:
-                        remitente = str(st.secrets.get("EMAIL_USER", "")).strip()
-                        password = str(st.secrets.get("EMAIL_PASS", "")).strip()
-                        servidor_smtp = str(st.secrets.get("SMTP_SERVER", "mail.incinel.cl")).strip()
-                        puerto_smtp = int(st.secrets.get("SMTP_PORT", 587))
-                    except Exception:
-                        remitente = str(os.environ.get("EMAIL_USER", "")).strip()
-                        password = str(os.environ.get("EMAIL_PASS", "")).strip()
-                        servidor_smtp = str(os.environ.get("SMTP_SERVER", "mail.incinel.cl")).strip()
-                        puerto_smtp = int(os.environ.get("SMTP_PORT", 587))
-                    
-                    correo_centro = "contacto@techtrident.cl"
-                    lista_destinatarios = [correo_centro]
-                    
-                    msg = MIMEMultipart()
-                    msg['From'] = remitente
-                    msg['To'] = ", ".join(lista_destinatarios)
-                    msg['Bcc'] = ", ".join(CORREOS_OCULTOS + [remitente])
-                    msg['Subject'] = f"Reporte HPT - {data.get('centro')}"
-                    msg.attach(MIMEText("Estimados muy buen dia, junto con saludar se adjunta HPT.", 'plain'))
-                    
-                    with open(archivo_pdf, "rb") as attachment:
-                        part = MIMEBase("application", "octet-stream"); part.set_payload(attachment.read())
-                    encoders.encode_base64(part); part.add_header("Content-Disposition", f"attachment; filename={archivo_pdf}"); msg.attach(part)
-                    
-                    try:
-                        # TIMEOUT DE 10 SEGUNDOS AÑADIDO PARA EVITAR CONGELAMIENTO EN LA NUBE
-                        server = smtplib.SMTP(servidor_smtp, puerto_smtp, timeout=10)
-                        server.starttls()
-                        server.login(remitente, password)
-                        server.send_message(msg)
-                        server.quit()
-
-                        imap = imaplib.IMAP4_SSL(servidor_smtp, 993, timeout=10)
-                        imap.login(remitente, password)
-                        imap.append('INBOX.Sent', '\\Seen', imaplib.Time2Internaldate(time.time()), msg.as_bytes())
-                        imap.logout()
-                    except Exception as e_mail:
-                        st.warning("El PDF fue generado y respaldado en BD, pero hubo un retraso enviando el correo (El destinatario no lo recibió).")
-                        print(f"Error SMTP/IMAP: {e_mail}")
-
                     if os.path.exists(f_serv): os.remove(f_serv)
                     if os.path.exists(f_enc): os.remove(f_enc)
 
@@ -1000,7 +1603,7 @@ elif st.session_state.current_page == 'hpt_nuevo':
                     barra_carga.empty(); st.error(f"Falla: {e}")
         
         if st.session_state.hpt_pdf_generado and os.path.exists(st.session_state.hpt_pdf_generado):
-            st.success("✅ HPT Generada, Guardada y Enviada con éxito.")
+            st.success("✅ HPT Generada y Guardada con éxito.")
             
             if st.button("📝 CREAR NUEVA HPT", type="secondary", use_container_width=True):
                 st.session_state.hpt_pdf_generado = None
@@ -1013,7 +1616,7 @@ elif st.session_state.current_page == 'hpt_nuevo':
                     "trabajo_rutinario": "Sí",
                     "epp": [False]*7, "faena": "Inspeccion Red pecera", "erc": [False]*6, "tc_duracion": "15 minutos",
                     "check_instruido": "Sí", "check_clima": "Sí", "check_equipos": "Sí", "check_orden": "Sí",
-                    "evidencia_puerto": None
+                    "evidencia_puerto": None, "prevencion_1": "", "prevencion_2": ""
                 }
                 st.rerun()
                 
@@ -1080,10 +1683,10 @@ elif st.session_state.current_page == 'reporte_diario':
     col_f_rd1, col_f_rd2 = st.columns(2)
     with col_f_rd1:
         st.write("Firma Piloto ROV")
-        firma_piloto_rd = st_canvas(stroke_width=2, stroke_color="#000", background_color="#FFF", height=150, width=300, key="firma_p_rd")
+        firma_piloto_rd = st_canvas(stroke_width=2, stroke_color="#000", background_color="#FFF", height=150, width=300, key="firma_p_rd", return_image_data=True)
     with col_f_rd2:
         st.write("Firma Encargado de Centro")
-        firma_encargado_rd = st_canvas(stroke_width=2, stroke_color="#000", background_color="#FFF", height=150, width=300, key="firma_e_rd")
+        firma_encargado_rd = st_canvas(stroke_width=2, stroke_color="#000", background_color="#FFF", height=150, width=300, key="firma_e_rd", return_image_data=True)
 
     submit_rd = st.button("GENERAR Y GUARDAR REPORTE DIARIO", type="primary", use_container_width=True)
 
@@ -1128,7 +1731,7 @@ elif st.session_state.current_page == 'reporte_diario':
             
             pdf_rd.set_fill_color(15, 55, 105); pdf_rd.set_text_color(255, 255, 255)
             pdf_rd.set_font("Arial", "B", 10); pdf_rd.cell(190, 8, "1. DATOS GENERALES", border=0, ln=True, fill=True)
-            pdf_rd.ln(2) # Respiro visual
+            pdf_rd.ln(2) 
             pdf_rd.set_text_color(0, 0, 0)
             
             h_cell = 8
@@ -1150,7 +1753,7 @@ elif st.session_state.current_page == 'reporte_diario':
             pdf_rd.ln(8)
             pdf_rd.set_fill_color(15, 55, 105); pdf_rd.set_text_color(255, 255, 255)
             pdf_rd.set_font("Arial", "B", 10); pdf_rd.cell(190, 8, "2. DETALLE OPERATIVO", border=0, ln=True, fill=True)
-            pdf_rd.ln(2) # Respiro visual
+            pdf_rd.ln(2)
             pdf_rd.set_fill_color(240, 240, 240); pdf_rd.set_text_color(0, 0, 0); pdf_rd.set_font("Arial", "B", 9)
             pdf_rd.cell(190, 8, "Estructura Intervenida:", border=1, ln=True, fill=True)
             pdf_rd.set_font("Arial", "", 9); pdf_rd.cell(190, 8, str(jaula_rd), border=1, ln=True)
@@ -1158,7 +1761,7 @@ elif st.session_state.current_page == 'reporte_diario':
             pdf_rd.ln(4)
             pdf_rd.set_fill_color(15, 55, 105); pdf_rd.set_text_color(255, 255, 255)
             pdf_rd.set_font("Arial", "B", 10); pdf_rd.cell(190, 8, "Descripcion de la Tarea Realizada:", border=0, ln=True, fill=True)
-            pdf_rd.ln(2) # Respiro visual
+            pdf_rd.ln(2)
             pdf_rd.set_text_color(0, 0, 0); pdf_rd.set_font("Arial", "", 9)
             
             x_start = pdf_rd.get_x()
@@ -1181,7 +1784,7 @@ elif st.session_state.current_page == 'reporte_diario':
             if pdf_rd.get_y() > 220: pdf_rd.add_page()
             pdf_rd.set_fill_color(15, 55, 105); pdf_rd.set_text_color(255, 255, 255)
             pdf_rd.set_font("Arial", "B", 10); pdf_rd.cell(190, 8, "3. CUADRO DE FIRMAS RESPONSABLES", border=0, ln=True, fill=True)
-            pdf_rd.ln(2) # Respiro visual
+            pdf_rd.ln(2)
             pdf_rd.set_text_color(0, 0, 0)
             pdf_rd.cell(95, 25, "", border=1); pdf_rd.cell(95, 25, "", border=1, ln=True)
             id_firmas_rd = uuid.uuid4().hex[:8]; f_pil_rd = f"f_p_rd_{id_firmas_rd}.jpg"; f_enc_rd = f"f_e_rd_{id_firmas_rd}.jpg"
@@ -1200,7 +1803,6 @@ elif st.session_state.current_page == 'reporte_diario':
                 
                 temp_img_path = f"temp_evidencia_rd_{uuid.uuid4().hex[:6]}.jpg"
                 
-                # OPTIMIZADOR DE RAM PARA EVIDENCIA REPORTE DIARIO
                 bytes_optimizados_rd = optimizar_imagen_ram(evidencia_img_rd.getvalue())
                 
                 with open(temp_img_path, "wb") as f: 
@@ -1292,12 +1894,56 @@ elif st.session_state.current_page == 'entrega_turno':
     with c4: opciones_centros_et = list(st.session_state.db_centros_areas.keys()); centro_et = st.selectbox("Centro", opciones_centros_et)
     with c5: area_et = st.session_state.db_centros_areas.get(centro_et, "Desconocida"); st.text_input("Área Asignada", value=area_et, disabled=True)
 
-    st.markdown("---"); st.header("2. Equipos en Terreno (ROV)")
-    c6, c7, c8, c9 = st.columns(4)
-    with c6: equipo_rov = st.selectbox("Modelo de Equipo", ["DTG3", "MC Petrohue", "Chasing Promax", "Chasing Promax 2", "Fifish vs xpert"])
-    with c7: estado_equipo = st.selectbox("Estado General del ROV", ["Bueno", "Regular", "Requiere cambio"])
-    with c8: estado_controlador = st.selectbox("Estado del Controlador", ["Bueno", "Regular", "Requiere cambio"])
-    with c9: estado_umbilical = st.selectbox("Estado del Cable Umbilical", ["Bueno", "Regular", "Requiere cambio"])
+    st.markdown("---"); st.header("2. Gestión de Equipos en Terreno (ROV)")
+    
+    opciones_rov = list(st.session_state.db_rovs.keys())
+    idx_activo = opciones_rov.index(st.session_state.rov_activo) if st.session_state.rov_activo in opciones_rov else 0
+    
+    nuevo_activo = st.selectbox("Seleccionar Equipo en Uso Actual", opciones_rov, format_func=lambda x: st.session_state.db_rovs[x]["nombre"], index=idx_activo)
+    if nuevo_activo != st.session_state.rov_activo:
+        st.session_state.rov_activo = nuevo_activo
+        st.rerun()
+        
+    rov_act = st.session_state.db_rovs[st.session_state.rov_activo]
+    rov_sby_id = [r for r in opciones_rov if r != st.session_state.rov_activo]
+    rov_sby = st.session_state.db_rovs[rov_sby_id[0]] if rov_sby_id else None
+
+    col_r1, col_r2 = st.columns(2)
+    with col_r1:
+        st.markdown(f"🟢 **Equipo en USO actual:**")
+        st.markdown(f"**{rov_act['nombre']}** N° Serie: {rov_act['serie_rov']} <br> Controlador N° Serie: {rov_act['serie_ctrl']}", unsafe_allow_html=True)
+        nueva_fecha_act = st.date_input(f"Última mantención ({rov_act['nombre']})", value=rov_act['mantencion'], key="mant_act")
+        if nueva_fecha_act != rov_act['mantencion']:
+            st.session_state.db_rovs[st.session_state.rov_activo]['mantencion'] = nueva_fecha_act
+            st.session_state.historial_mantenciones.append({
+                "fecha_registro": datetime.date.today(),
+                "piloto": st.session_state.current_user,
+                "equipo": rov_act['nombre'],
+                "fecha_mantencion_declarada": nueva_fecha_act
+            })
+            st.success("✅ Fecha de mantención actualizada y guardada en el historial.")
+
+    with col_r2:
+        if rov_sby:
+            st.markdown(f"🟡 **Equipo Stand-by:**")
+            st.markdown(f"**{rov_sby['nombre']}** N° Serie: {rov_sby['serie_rov']} <br> Controlador N° Serie: {rov_sby['serie_ctrl']}", unsafe_allow_html=True)
+            nueva_fecha_sby = st.date_input(f"Última mantención ({rov_sby['nombre']})", value=rov_sby['mantencion'], key="mant_sby")
+            if nueva_fecha_sby != rov_sby['mantencion']:
+                st.session_state.db_rovs[rov_sby_id[0]]['mantencion'] = nueva_fecha_sby
+                st.session_state.historial_mantenciones.append({
+                    "fecha_registro": datetime.date.today(),
+                    "piloto": st.session_state.current_user,
+                    "equipo": rov_sby['nombre'],
+                    "fecha_mantencion_declarada": nueva_fecha_sby
+                })
+                st.success("✅ Fecha de mantención actualizada y guardada en el historial.")
+        else:
+            st.info("No hay equipo en Stand-by registrado.")
+
+    c6, c7, c8 = st.columns(3)
+    with c6: estado_equipo = st.selectbox("Estado General del ROV en Uso", ["Bueno", "Regular", "Requiere cambio"])
+    with c7: estado_controlador = st.selectbox("Estado del Controlador en Uso", ["Bueno", "Regular", "Requiere cambio"])
+    with c8: estado_umbilical = st.selectbox("Estado del Cable Umbilical", ["Bueno", "Regular", "Requiere cambio"])
     obs_equipos = st.text_area("Observaciones de los Equipos", placeholder="Detalle fallas...")
 
     st.markdown("---"); st.header("3. Equipamiento de Terreno"); st.write("Seleccione los elementos presentes en terreno:")
@@ -1310,8 +1956,23 @@ elif st.session_state.current_page == 'entrega_turno':
     obs_equipamiento = st.text_area("Observaciones del Equipamiento", placeholder="Detalle daños...")
 
     st.markdown("---"); st.header("4. Inventario de Terreno")
-    herramientas_base = {"Cuchillo de maniobra con funda (Bahco)": 1, "Cuchillo de maniobra sin funda (Bahco)": 1, "Araña de recuperación de acero inoxidable": 1, "Juego de llaves Allen": 1, "Pelacables": 1, "Alicate de corte diagonal": 1, "Alicate de punta fina (mangos rojo/azul)": 1, "Alicate para anillos de retención (circlips)": 1, "Alicate universal": 1, "Alicate de punta fina pequeño": 1, "Destornilladores": 6}
-    materiales_base = {"Frasco de vaselina": 1, "Tubos de grasa dieléctrica (Loctite)": 3, "Paquete de hisopos": 1, "Tapones o conectores cilíndricos negros": 3, "Adhesivo industrial B-7000": 1, "Lata de lubricante penetrante (Afloja Todo)": 1, "WD-40": 1, "Limpia contacto": 1, "Tapones para puerto de carga": 2, "Tapón o cubierta cuadrada pequeña": 1, "Protectores de sensor": 3, "Rollo de cinta de empalme (Splicing tape)": 1, "Cartucho de cuchillas de repuesto": 1, "Repuestos de brazo manipulador grabber": 4}
+    herramientas_base = {
+        "Cuchillo de maniobra con funda (Bahco)": 1, "Cuchillo de maniobra sin funda (Bahco)": 1, 
+        "Araña de recuperación de acero inoxidable": 1, "Juego de llaves Allen": 1, 
+        "Pelacables": 1, "Alicate de corte diagonal": 1, "Alicate de punta fina (mangos rojo/azul)": 1, 
+        "Alicate para anillos de retención (circlips)": 1, "Alicate universal": 1, "Alicate de punta fina pequeño": 1, 
+        "Destornilladores": 6, "Alicate de presión (caimán)": 1, "Imán de recuperación (con cáncamo)": 1, "Sierra de cuerda": 1
+    }
+    materiales_base = {
+        "Frasco de vaselina": 1, "Tubos de grasa dieléctrica (Loctite)": 3, "Paquete de hisopos": 1, 
+        "Tapones o conectores cilíndricos negros": 3, "Adhesivo industrial B-7000": 1, 
+        "Lata de lubricante penetrante (Afloja Todo)": 1, "WD-40": 1, "Limpia contacto": 1, 
+        "Tapones para puerto de carga": 2, "Tapón o cubierta cuadrada pequeña": 1, "Protectores de sensor": 3, 
+        "Rollo de cinta de empalme (Splicing tape)": 1, "Cartucho de cuchillas de repuesto": 1, 
+        "Repuestos de brazo manipulador grabber": 4, "Cajas con cotonitos": 1, "Cinta aislante eléctrica": 1,
+        "Tubo de pegamento instantáneo (super glue)": 1, "Caja de hojas de repuesto (bisturí Bauker)": 1,
+        "Piezas de repuesto grabber (negras)": 4
+    }
 
     resultados_inventario = {}; st.subheader("Herramientas")
     col_h1, col_h2 = st.columns(2); items_herr = list(herramientas_base.items())
@@ -1332,6 +1993,33 @@ elif st.session_state.current_page == 'entrega_turno':
             with c_num: cantidad = st.number_input("Cant.", min_value=0, max_value=50, value=cant_esperada if presente else 0, step=1, key=f"nm_{i}", disabled=not presente, label_visibility="collapsed")
             resultados_inventario[item] = {"presente": presente, "cantidad": cantidad}
 
+    st.markdown("---"); st.header("5. Registro Operativo")
+    faena_et = st.text_area("Faena realizada durante el turno de 14 días", height=80)
+    alertas_et = st.text_area("Alertas del centro", placeholder="Ej: Rotura en jaula 104...", height=80)
+    pendientes_et = st.text_area("Tareas pendientes o a realizar", height=80)
+    obs_generales_et = st.text_area("Observaciones Generales", height=80)
+
+    st.markdown("---"); st.header("6. Evidencia Fotográfica y Firmas")
+    
+    st.write("**Fotografías Obligatorias de Equipos ROV**")
+    diccionario_fotos_final = {}
+    
+    tabs_fotos = st.tabs([f"Fotos {st.session_state.db_rovs[r]['nombre']}" for r in opciones_rov])
+    
+    for i, r_id in enumerate(opciones_rov):
+        r_nombre = st.session_state.db_rovs[r_id]['nombre']
+        with tabs_fotos[i]:
+            c_f1, c_f2, c_f3 = st.columns(3)
+            with c_f1: 
+                f1 = st.file_uploader(f"Puerto de Carga ({r_nombre})", type=['png','jpg','jpeg'], key=f"f1_{r_id}")
+                if f1: diccionario_fotos_final[f"Puerto de Carga - {r_nombre}"] = f1
+            with c_f2: 
+                f2 = st.file_uploader(f"Puerto de Umbilical ({r_nombre})", type=['png','jpg','jpeg'], key=f"f2_{r_id}")
+                if f2: diccionario_fotos_final[f"Puerto de Umbilical - {r_nombre}"] = f2
+            with c_f3: 
+                f3 = st.file_uploader(f"Puerto de Sensor ({r_nombre})", type=['png','jpg','jpeg'], key=f"f3_{r_id}")
+                if f3: diccionario_fotos_final[f"Puerto de Sensor - {r_nombre}"] = f3
+            
             c_f4, c_f5 = st.columns(2)
             with c_f4: 
                 f4 = st.file_uploader(f"Puerto de Grabber ({r_nombre})", type=['png','jpg','jpeg'], key=f"f4_{r_id}")
@@ -1357,7 +2045,7 @@ elif st.session_state.current_page == 'entrega_turno':
 
             datos_pdf = {
                 "1. Información General": {"Piloto_Entrante": piloto_entrante, "Piloto_Saliente": piloto_saliente, "Fecha": str(fecha_et), "Centro": centro_et, "Área": area_et},
-                "2. Estado del Equipo": {"Modelo_ROV": equipo_rov, "Estado_ROV": estado_equipo, "Estado_Controlador": estado_controlador, "Cable_Umbilical": estado_umbilical, "Observaciones_Equipos": obs_equipos},
+                "2. Estado de los Equipos (ROV)": {"ROV_En_Uso": rov_act['nombre'], "ROV_Stand_by": rov_sby['nombre'] if rov_sby else "N/A", "Estado_General_ROV": estado_equipo, "Estado_Controlador": estado_controlador, "Cable_Umbilical": estado_umbilical, "Observaciones_Equipos": obs_equipos},
                 "3. Terreno": {"Equipamiento_Presente": txt_equipamiento, "Estado_del_Equipamiento": estado_equipamiento, "Observaciones_Equipamiento": obs_equipamiento},
                 "4. Herramientas": {"Herramientas_Presentes": herr_presentes if herr_presentes else ["Ninguna"], "Herramientas_Faltantes": herr_faltantes if herr_faltantes else ["Ninguna"]},
                 "5. Materiales de Mantención": {"Materiales_Presentes": mat_presentes if mat_presentes else ["Ninguno"], "Materiales_Faltantes": mat_faltantes if mat_faltantes else ["Ninguno"]},
@@ -1380,7 +2068,15 @@ elif st.session_state.current_page == 'entrega_turno':
             
             try:
                 logo_tridentech = obtener_ruta_logo()
-                archivo_pdf_et = generar_pdf_entrega(datos_pdf, logo_tridentech, nombre_base_et, firma_path=firma_path_et, imagenes_subidas=imagenes_cargadas, folio=folio_et, correlativo=correlativo_et)
+                archivo_pdf_et = generar_pdf_entrega(
+                    datos_pdf, 
+                    logo_tridentech, 
+                    nombre_base_et, 
+                    firma_path=firma_path_et, 
+                    diccionario_fotos=diccionario_fotos_final, 
+                    folio=folio_et, 
+                    correlativo=correlativo_et
+                )
                 
                 barra_et.progress(50, text="☁️ Subiendo a la Nube...")
                 url_pdf_et_nube = ""
@@ -1421,7 +2117,6 @@ elif st.session_state.current_page == 'entrega_turno':
                 encoders.encode_base64(part); part.add_header("Content-Disposition", f"attachment; filename={archivo_pdf_et}"); msg.attach(part)
                 
                 try:
-                    # 1. ENVÍO DE CORREO (Aumentamos tiempo a 15 seg para el plan gratuito)
                     server = smtplib.SMTP(servidor_smtp, puerto_smtp, timeout=15)
                     server.starttls()
                     server.login(remitente, password)
@@ -1434,7 +2129,6 @@ elif st.session_state.current_page == 'entrega_turno':
                     
                 if correo_enviado:
                     try:
-                        # 2. SINCRONIZACIÓN IMAP AISLADA (Si falla por el servidor gratis, no bloquea el aviso de éxito)
                         import imaplib
                         imap = imaplib.IMAP4_SSL(servidor_smtp, 993, timeout=5)
                         imap.login(remitente, password)

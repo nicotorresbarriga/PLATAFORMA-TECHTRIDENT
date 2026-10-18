@@ -152,6 +152,7 @@ if 'historial_mantenciones' not in st.session_state:
 
 CORREOS_OCULTOS = []
 
+# LISTAS Y RANGOS
 RANGOS_INICIO = [f"{str(h).zfill(2)}:{str(m).zfill(2)}" for h in range(6, 12) for m in (0, 30)]  
 RANGO_TERMINO = [f"{str(h).zfill(2)}:{str(m).zfill(2)}" for h in range(16, 21) for m in (0, 30)] 
 RANGO_DURACION = ["5 minutos", "10 minutos", "15 minutos", "20 minutos", "25 minutos", "30 minutos"]
@@ -162,6 +163,7 @@ try:
 except Exception as e:
     st.sidebar.warning(f"⚠️ Advertencia: Conexión Supabase inactiva.")
 
+# Inicialización de Sesiones de la App
 if 'local_hpt_history' not in st.session_state: st.session_state.local_hpt_history = []
 if 'local_reportes_history' not in st.session_state: st.session_state.local_reportes_history = []
 if 'local_entrega_history' not in st.session_state: st.session_state.local_entrega_history = []
@@ -173,8 +175,8 @@ if 'hpt_step' not in st.session_state: st.session_state.hpt_step = 1
 
 if 'hpt_pdf_generado' not in st.session_state: st.session_state.hpt_pdf_generado = None
 if 'rd_pdf_generado' not in st.session_state: st.session_state.rd_pdf_generado = None
-if 'ic_pdf_generado' not in st.session_state: st.session_state.ic_pdf_generado = None
 
+if 'ic_pdf_generado' not in st.session_state: st.session_state.ic_pdf_generado = None
 if 'anomalias' not in st.session_state: st.session_state.anomalias = []
 if 'ic_data' not in st.session_state: st.session_state.ic_data = {}
 if 'historial_reportes_correo' not in st.session_state: st.session_state.historial_reportes_correo = []
@@ -192,6 +194,10 @@ if 'hpt_data' not in st.session_state:
     }
 if 'admin_acceso_historial' not in st.session_state: st.session_state.admin_acceso_historial = False
 if 'admin_acceso_graficos' not in st.session_state: st.session_state.admin_acceso_graficos = False
+
+# Variables para limpiar las firmas HPT
+if 'k_p' not in st.session_state: st.session_state.k_p = 0
+if 'k_e' not in st.session_state: st.session_state.k_e = 0
 
 def set_page(page_name): st.session_state.current_page = page_name
 def set_step(step_number): st.session_state.hpt_step = step_number
@@ -669,6 +675,10 @@ def generar_pdf_entrega(datos, logo_filename, nombre_archivo, firma_path=None, d
     return nombre_archivo
 
 if not st.session_state.logged_in:
+    # AÑADIDO: Fecha y Hora en la esquina de Login
+    hora_chile = datetime.datetime.utcnow() - datetime.timedelta(hours=4)
+    st.markdown(f"<div style='position: absolute; top: 15px; right: 25px; color: #00a8cc; font-weight: bold; font-size: 16px;'>📅 {hora_chile.strftime('%d-%m-%Y')} &nbsp; 🕒 {hora_chile.strftime('%H:%M')}</div>", unsafe_allow_html=True)
+    
     col1, col2, col3 = st.columns([3, 2, 3])
     with col2:
         st.markdown("<br><br>", unsafe_allow_html=True)
@@ -883,6 +893,15 @@ elif st.session_state.current_page == 'main_menu':
         if st.button("✉️ REPORTE CORREO", use_container_width=True): set_page('reporte_correo'); st.rerun()
         
     st.markdown("<br>", unsafe_allow_html=True)
+    
+    # AÑADIDO: Accesos directos a sitios web
+    st.info("🔗 **Accesos Rápidos de Utilidad**")
+    cl1, cl2, cl3 = st.columns(3)
+    with cl1: st.link_button("🌊 Tabla de Mareas", "https://www.tablademareas.com", use_container_width=True)
+    with cl2: st.link_button("💨 Windguru", "https://www.windguru.cz", use_container_width=True)
+    with cl3: st.link_button("🚢 SITPORT", "https://sitport.directemar.cl/#/general", use_container_width=True)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
     c_btn1, c_btn2, c_btn3 = st.columns([1, 2, 1])
     with c_btn2:
         if st.button("📊 HISTORIAL / AUDITORÍA COMPLETA", use_container_width=True): set_page('modulo_busqueda'); st.rerun()
@@ -1095,6 +1114,30 @@ OBSERVACIONES
  {ic_observaciones}
 """
                     st.code(texto_correo, language='text')
+
+        st.divider()
+        st.subheader("Acciones de Fin de Semana")
+        st.info("La plataforma ha ido guardando silenciosamente todas las anomalías que registraste durante la semana en una base de datos temporal.")
+        if not st.session_state.historial_excel_semanal.empty:
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                st.session_state.historial_excel_semanal.to_excel(writer, index=False, sheet_name='Registros')
+            
+            st.download_button(
+                label="📊 DESCARGAR CONSOLIDADO SEMANAL (EXCEL)", 
+                data=buffer.getvalue(), 
+                file_name=f"Consolidado_Semanal_{datetime.date.today()}.xlsx", 
+                mime="application/vnd.ms-excel",
+                use_container_width=True
+            )
+            
+            if st.button("🧹 Limpiar memoria del Excel (Usar el lunes)", use_container_width=True):
+                st.session_state.historial_excel_semanal = pd.DataFrame(columns=[
+                    "Fecha", "Semana", "Jaula", "Centro", "Tipo Red", "Anomalia", "Ubicacion", "Profundidad", "Estado"
+                ])
+                st.rerun()
+        else:
+            st.warning("No hay registros guardados para generar el Excel esta semana.")
 
 elif st.session_state.current_page == 'reporte_correo':
     st.button("⬅️ Volver al Menú Principal", on_click=set_page, args=('main_menu',))
@@ -1393,18 +1436,31 @@ elif st.session_state.current_page == 'hpt_nuevo':
                 rut_defecto = st.session_state.db_usuarios.get(st.session_state.current_user, {}).get("rut", "")
                 tc_rut = st.text_input("RUT Relator", value=rut_defecto)
             with col2:
-                tc_hora = st.selectbox("Hora Difusión", RANGO_HORA_DIFUSION)
+                # AÑADIDO: Configurar por defecto las 07:45 en HPT
+                idx_hora = RANGO_HORA_DIFUSION.index("07:45") if "07:45" in RANGO_HORA_DIFUSION else 0
+                tc_hora = st.selectbox("Hora Difusión", RANGO_HORA_DIFUSION, index=idx_hora)
+                
                 idx_dur = RANGO_DURACION.index(st.session_state.hpt_data["tc_duracion"]) if st.session_state.hpt_data["tc_duracion"] in RANGO_DURACION else 2
                 tc_duracion = st.selectbox("Duración Difusión", RANGO_DURACION, index=idx_dur)
                 
         with st.expander("Firmas de Responsabilidad", expanded=True):
             col_f1, col_f2 = st.columns(2)
+            
             with col_f1:
                 st.write("Firma Supervisor Servicio (Piloto)")
-                firma_sup_serv = st_canvas(stroke_width=2, stroke_color="#000", background_color="#FFF", height=150, width=300, key="firma_serv", return_image_data=True)
+                firma_sup_serv = st_canvas(stroke_width=2, stroke_color="#000", background_color="#FFF", height=150, width=300, key=f"firma_serv_{st.session_state.k_p}", return_image_data=True)
+                # AÑADIDO: Botón de reinicio firma piloto
+                if st.button("🔄 Reiniciar Firma Piloto", key="btn_cp", use_container_width=True):
+                    st.session_state.k_p += 1
+                    st.rerun()
+                    
             with col_f2:
                 st.write("Firma Encargado de Centro")
-                firma_encargado = st_canvas(stroke_width=2, stroke_color="#000", background_color="#FFF", height=150, width=300, key="firma_encargado", return_image_data=True)
+                firma_encargado = st_canvas(stroke_width=2, stroke_color="#000", background_color="#FFF", height=150, width=300, key=f"firma_encargado_{st.session_state.k_e}", return_image_data=True)
+                # AÑADIDO: Botón de reinicio firma encargado
+                if st.button("🔄 Reiniciar Firma Encargado", key="btn_ce", use_container_width=True):
+                    st.session_state.k_e += 1
+                    st.rerun()
 
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
@@ -1739,7 +1795,7 @@ elif st.session_state.current_page == 'reporte_diario':
             pdf_rd.set_font("Arial", "B", 9); pdf_rd.cell(35, h_cell, "Rango Horario:", border=1); pdf_rd.set_font("Arial", "", 9); pdf_rd.cell(60, h_cell, f"{hora_inicio_rd} - {hora_termino_rd}", border=1, ln=True)
             
             pdf_rd.set_font("Arial", "B", 9); pdf_rd.cell(35, h_cell, "Piloto ROV:", border=1); pdf_rd.set_font("Arial", "", 9); pdf_rd.cell(60, h_cell, piloto_rd, border=1)
-            pdf_rd.set_font("Arial", "B", 9); pdf_rd.cell(35, h_cell, "Nombre Ponton:", border=1); pdf_rd.set_font("Arial", "", 9); pdf_rd.cell(60, h_cell, ponton_rd, border=1, ln=True)
+            pdf_rd.set_font("Arial", "B", 9); pdf_rd.cell(35, h_cell, "Nombre Ponton:", border=1); pdf.set_font("Arial", "", 9); pdf_rd.cell(60, h_cell, ponton_rd, border=1, ln=True)
             
             pdf_rd.set_font("Arial", "B", 9); pdf_rd.cell(35, h_cell, "Empresa:", border=1); pdf_rd.set_font("Arial", "", 9); pdf_rd.cell(60, h_cell, empresa_rd, border=1)
             pdf_rd.set_font("Arial", "B", 9); pdf_rd.cell(35, h_cell, "Centro Cultivo:", border=1); pdf_rd.set_font("Arial", "", 9); pdf_rd.cell(60, h_cell, centro_rd, border=1, ln=True)

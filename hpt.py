@@ -1,11 +1,13 @@
 import streamlit as st
 import pandas as pd
 import datetime
+from zoneinfo import ZoneInfo
 import os
 import time
 import smtplib
 import imaplib
 import re
+import pickle
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
@@ -108,6 +110,13 @@ st.markdown(
 
 CLAVE_ADMIN = "9926"
 
+def obtener_hora_chile():
+    """Retorna la fecha y hora oficial de Chile ajustando horario de invierno/verano automáticamente."""
+    try:
+        return datetime.datetime.now(ZoneInfo("America/Santiago"))
+    except Exception:
+        return datetime.datetime.utcnow() - datetime.timedelta(hours=3)
+
 @st.cache_resource
 def init_connection():
     try:
@@ -128,6 +137,42 @@ def init_connection():
         url = url[:url.find("http", 4)]
         
     return create_client(url, key)
+
+# ----------------- SISTEMA PERSISTENTE DE BORRADORES HPT -----------------
+ARCHIVO_BORRADORES = "borradores_hpt_techtrident.pkl"
+
+@st.cache_resource
+def obtener_almacen_borradores():
+    if os.path.exists(ARCHIVO_BORRADORES):
+        try:
+            with open(ARCHIVO_BORRADORES, "rb") as f:
+                return pickle.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def guardar_borrador_usuario(usuario, step, data):
+    borradores = obtener_almacen_borradores()
+    borradores[usuario] = {
+        "step": step,
+        "data": data.copy(),
+        "guardado_el": obtener_hora_chile().strftime("%d-%m-%Y %H:%M")
+    }
+    try:
+        with open(ARCHIVO_BORRADORES, "wb") as f:
+            pickle.dump(borradores, f)
+    except Exception:
+        pass
+
+def eliminar_borrador_usuario(usuario):
+    borradores = obtener_almacen_borradores()
+    if usuario in borradores:
+        del borradores[usuario]
+        try:
+            with open(ARCHIVO_BORRADORES, "wb") as f:
+                pickle.dump(borradores, f)
+        except Exception:
+            pass
 
 if 'db_usuarios' not in st.session_state: 
     st.session_state.db_usuarios = {
@@ -152,7 +197,6 @@ if 'historial_mantenciones' not in st.session_state:
 
 CORREOS_OCULTOS = []
 
-# LISTAS Y RANGOS
 RANGOS_INICIO = [f"{str(h).zfill(2)}:{str(m).zfill(2)}" for h in range(6, 12) for m in (0, 30)]  
 RANGO_TERMINO = [f"{str(h).zfill(2)}:{str(m).zfill(2)}" for h in range(16, 21) for m in (0, 30)] 
 RANGO_DURACION = ["5 minutos", "10 minutos", "15 minutos", "20 minutos", "25 minutos", "30 minutos"]
@@ -163,7 +207,6 @@ try:
 except Exception as e:
     st.sidebar.warning(f"⚠️ Advertencia: Conexión Supabase inactiva.")
 
-# Inicialización de Sesiones de la App
 if 'local_hpt_history' not in st.session_state: st.session_state.local_hpt_history = []
 if 'local_reportes_history' not in st.session_state: st.session_state.local_reportes_history = []
 if 'local_entrega_history' not in st.session_state: st.session_state.local_entrega_history = []
@@ -175,11 +218,15 @@ if 'hpt_step' not in st.session_state: st.session_state.hpt_step = 1
 
 if 'hpt_pdf_generado' not in st.session_state: st.session_state.hpt_pdf_generado = None
 if 'rd_pdf_generado' not in st.session_state: st.session_state.rd_pdf_generado = None
-
 if 'ic_pdf_generado' not in st.session_state: st.session_state.ic_pdf_generado = None
+
 if 'anomalias' not in st.session_state: st.session_state.anomalias = []
 if 'ic_data' not in st.session_state: st.session_state.ic_data = {}
 if 'historial_reportes_correo' not in st.session_state: st.session_state.historial_reportes_correo = []
+
+# Contadores para reiniciar las firmas en la validación de la HPT
+if 'reset_firma_piloto_hpt' not in st.session_state: st.session_state.reset_firma_piloto_hpt = 0
+if 'reset_firma_encargado_hpt' not in st.session_state: st.session_state.reset_firma_encargado_hpt = 0
 
 if 'hpt_data' not in st.session_state:
     opciones_c = list(st.session_state.db_centros_areas.keys())
@@ -189,15 +236,12 @@ if 'hpt_data' not in st.session_state:
         "correo": "", "encargado": "", "ponton": "", "condicion_puerto": "Abierto", "tarea": "",
         "trabajo_rutinario": "Sí",
         "epp": [False]*7, "faena": "Inspeccion Red pecera", "erc": [False]*6, "tc_duracion": "15 minutos",
+        "tc_hora": "07:45", "tc_nombre": "Faena diaria", "tc_fecha": datetime.date.today(),
         "check_instruido": "Sí", "check_clima": "Sí", "check_equipos": "Sí", "check_orden": "Sí",
         "evidencia_puerto": None, "prevencion_1": "", "prevencion_2": ""
     }
 if 'admin_acceso_historial' not in st.session_state: st.session_state.admin_acceso_historial = False
 if 'admin_acceso_graficos' not in st.session_state: st.session_state.admin_acceso_graficos = False
-
-# Variables para limpiar las firmas HPT
-if 'k_p' not in st.session_state: st.session_state.k_p = 0
-if 'k_e' not in st.session_state: st.session_state.k_e = 0
 
 def set_page(page_name): st.session_state.current_page = page_name
 def set_step(step_number): st.session_state.hpt_step = step_number
@@ -520,7 +564,7 @@ def generar_pdf_entrega(datos, logo_filename, nombre_archivo, firma_path=None, d
     pdf.set_fill_color(15, 55, 105); pdf.set_text_color(255, 255, 255) 
     pdf.cell(0, 10, "REPORTE FORMAL DE ENTREGA DE TURNO - ROV", border=0, ln=True, align='C', fill=True)
     
-    hora_chile = datetime.datetime.utcnow() - datetime.timedelta(hours=4)
+    hora_chile = obtener_hora_chile()
     fecha_hora_actual = hora_chile.strftime("%Y-%m-%d %H:%M:%S")
     
     d1 = datos.get("1. Información General", {})
@@ -675,13 +719,22 @@ def generar_pdf_entrega(datos, logo_filename, nombre_archivo, firma_path=None, d
     return nombre_archivo
 
 if not st.session_state.logged_in:
-    # AÑADIDO: Fecha y Hora en la esquina de Login
-    hora_chile = datetime.datetime.utcnow() - datetime.timedelta(hours=4)
-    st.markdown(f"<div style='position: absolute; top: 15px; right: 25px; color: #00a8cc; font-weight: bold; font-size: 16px;'>📅 {hora_chile.strftime('%d-%m-%Y')} &nbsp; 🕒 {hora_chile.strftime('%H:%M')}</div>", unsafe_allow_html=True)
-    
+    # RELOJ Y FECHA (HORA OFICIAL DE CHILE) EN ESQUINA SUPERIOR DERECHA DEL LOGIN
+    ahora_cl = obtener_hora_chile()
+    st.markdown(
+        f"""
+        <div style='display: flex; justify-content: flex-end; width: 100%; padding-top: 5px;'>
+            <div style='background: rgba(15, 55, 105, 0.75); border: 1px solid #00a8cc; border-radius: 10px; padding: 6px 14px; color: #ffffff; font-weight: 600; font-size: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.4);'>
+                📅 {ahora_cl.strftime('%d-%m-%Y')} &nbsp;|&nbsp; 🕒 {ahora_cl.strftime('%H:%M')} hrs (Hora Oficial Chile)
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
     col1, col2, col3 = st.columns([3, 2, 3])
     with col2:
-        st.markdown("<br><br>", unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
         logo = obtener_ruta_logo()
         if logo and os.path.exists(logo):
             try:
@@ -711,7 +764,7 @@ elif st.session_state.current_page == 'main_menu':
     st.markdown("<h1 style='text-align: center;'>Sistema de Gestión Operativa</h1>", unsafe_allow_html=True)
     st.write(f"Operador en turno: **{st.session_state.current_user}**")
     
-    es_lunes = datetime.date.today().weekday() == 0
+    es_lunes = obtener_hora_chile().date().weekday() == 0
     if es_lunes and not st.session_state.get('monday_alert_dismissed', False):
         st.warning("📅 **Rotación Semanal de Equipos ROV (Día Lunes)**")
         rov_actual_id = st.session_state.rov_activo
@@ -750,7 +803,7 @@ elif st.session_state.current_page == 'main_menu':
             total_rd = len(df_rd) if not df_rd.empty else 0
             total_reportes = total_hpt + total_rd
             
-            hoy_str = str(datetime.date.today())
+            hoy_str = str(obtener_hora_chile().date())
             
             hpt_hoy = df_hpt[df_hpt['fecha'] == hoy_str] if not df_hpt.empty and 'fecha' in df_hpt.columns else pd.DataFrame()
             rd_hoy = df_rd[df_rd['fecha'] == hoy_str] if not df_rd.empty and 'fecha' in df_rd.columns else pd.DataFrame()
@@ -782,7 +835,7 @@ elif st.session_state.current_page == 'main_menu':
                 else:
                     st.success("✅ Todos los Reportes Diarios enviados.")
                     
-            hora_chile = (datetime.datetime.utcnow() - datetime.timedelta(hours=4)).time()
+            hora_chile = obtener_hora_chile().time()
             limite_hpt = datetime.time(9, 30)
             limite_rd = datetime.time(20, 0)
             
@@ -894,13 +947,17 @@ elif st.session_state.current_page == 'main_menu':
         
     st.markdown("<br>", unsafe_allow_html=True)
     
-    # AÑADIDO: Accesos directos a sitios web
-    st.info("🔗 **Accesos Rápidos de Utilidad**")
-    cl1, cl2, cl3 = st.columns(3)
-    with cl1: st.link_button("🌊 Tabla de Mareas", "https://www.tablademareas.com", use_container_width=True)
-    with cl2: st.link_button("💨 Windguru", "https://www.windguru.cz", use_container_width=True)
-    with cl3: st.link_button("🚢 SITPORT", "https://sitport.directemar.cl/#/general", use_container_width=True)
-    
+    # RECUADRO COMPACTO DE ACCESOS EXTERNOS EN EL MENÚ
+    with st.container(border=True):
+        st.markdown("<p style='text-align: center; font-weight: 600; margin-bottom: 8px; color: #00a8cc !important;'>🌐 Accesos Rápidos de Navegación y Clima</p>", unsafe_allow_html=True)
+        col_w1, col_w2, col_w3 = st.columns(3)
+        with col_w1:
+            st.link_button("🌊 Tabla de Mareas", "https://www.tablademareas.com", use_container_width=True)
+        with col_w2:
+            st.link_button("💨 Windguru", "https://www.windguru.com", use_container_width=True)
+        with col_w3:
+            st.link_button("⚓ SITPORT", "https://www.sitport.cl", use_container_width=True)
+
     st.markdown("<br>", unsafe_allow_html=True)
     c_btn1, c_btn2, c_btn3 = st.columns([1, 2, 1])
     with c_btn2:
@@ -1115,30 +1172,6 @@ OBSERVACIONES
 """
                     st.code(texto_correo, language='text')
 
-        st.divider()
-        st.subheader("Acciones de Fin de Semana")
-        st.info("La plataforma ha ido guardando silenciosamente todas las anomalías que registraste durante la semana en una base de datos temporal.")
-        if not st.session_state.historial_excel_semanal.empty:
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                st.session_state.historial_excel_semanal.to_excel(writer, index=False, sheet_name='Registros')
-            
-            st.download_button(
-                label="📊 DESCARGAR CONSOLIDADO SEMANAL (EXCEL)", 
-                data=buffer.getvalue(), 
-                file_name=f"Consolidado_Semanal_{datetime.date.today()}.xlsx", 
-                mime="application/vnd.ms-excel",
-                use_container_width=True
-            )
-            
-            if st.button("🧹 Limpiar memoria del Excel (Usar el lunes)", use_container_width=True):
-                st.session_state.historial_excel_semanal = pd.DataFrame(columns=[
-                    "Fecha", "Semana", "Jaula", "Centro", "Tipo Red", "Anomalia", "Ubicacion", "Profundidad", "Estado"
-                ])
-                st.rerun()
-        else:
-            st.warning("No hay registros guardados para generar el Excel esta semana.")
-
 elif st.session_state.current_page == 'reporte_correo':
     st.button("⬅️ Volver al Menú Principal", on_click=set_page, args=('main_menu',))
     st.markdown("<h1 style='text-align: center;'>Generador de Reporte para Correo</h1>", unsafe_allow_html=True)
@@ -1259,7 +1292,29 @@ elif st.session_state.current_page == 'hpt_menu':
     st.button("⬅️ Volver al Menú Principal", on_click=set_page, args=('main_menu',))
     st.markdown("<h1 style='text-align: center;'>Módulo HPT</h1>", unsafe_allow_html=True)
     st.divider()
-    if st.button("➕ CREAR NUEVA HPT", use_container_width=True): 
+
+    # BUSCAR Y CARGAR BORRADOR GUARDADO DEL USUARIO
+    borradores = obtener_almacen_borradores()
+    user_actual = st.session_state.current_user
+    if user_actual in borradores:
+        info_b = borradores[user_actual]
+        with st.container(border=True):
+            st.info(f"📂 **Tienes una HPT guardada en borrador** (Centro: **{info_b['data'].get('centro', 'N/A')}** | Paso {info_b['step']}/4 | Guardada el: {info_b.get('guardado_el', 'Hoy')})")
+            col_b1, col_b2 = st.columns(2)
+            with col_b1:
+                if st.button("📝 ABRIR Y CONTINUAR HPT GUARDADA", type="primary", use_container_width=True):
+                    st.session_state.hpt_data = info_b["data"].copy()
+                    st.session_state.hpt_step = info_b["step"]
+                    st.session_state.hpt_pdf_generado = None
+                    set_page('hpt_nuevo')
+                    st.rerun()
+            with col_b2:
+                if st.button("🗑️ DESCARTAR BORRADOR", use_container_width=True):
+                    eliminar_borrador_usuario(user_actual)
+                    st.rerun()
+        st.markdown("<br>", unsafe_allow_html=True)
+
+    if st.button("➕ CREAR NUEVA HPT DESDE CERO", use_container_width=True): 
         set_step(1)
         st.session_state.hpt_pdf_generado = None 
         opciones_c = list(st.session_state.db_centros_areas.keys())
@@ -1269,6 +1324,7 @@ elif st.session_state.current_page == 'hpt_menu':
             "correo": "", "encargado": "", "ponton": "", "condicion_puerto": "Abierto", "tarea": "",
             "trabajo_rutinario": "Sí",
             "epp": [False]*7, "faena": "Inspeccion Red pecera", "erc": [False]*6, "tc_duracion": "15 minutos",
+            "tc_hora": "07:45", "tc_nombre": "Faena diaria", "tc_fecha": datetime.date.today(),
             "check_instruido": "Sí", "check_clima": "Sí", "check_equipos": "Sí", "check_orden": "Sí",
             "evidencia_puerto": None, "prevencion_1": "", "prevencion_2": ""
         }
@@ -1276,7 +1332,7 @@ elif st.session_state.current_page == 'hpt_menu':
         st.rerun()
 
 elif st.session_state.current_page == 'hpt_nuevo':
-    st.button("⬅️ Cancelar y Volver al Menú HPT", on_click=set_page, args=('hpt_menu',))
+     barra_superior = st.container()
     st.markdown(f"<h1 style='text-align: center;'>Nueva HPT - Paso {st.session_state.hpt_step}</h1>", unsafe_allow_html=True)
     st.progress(st.session_state.hpt_step / 4.0)
     
@@ -1305,7 +1361,9 @@ elif st.session_state.current_page == 'hpt_nuevo':
             idx_ht = RANGO_TERMINO.index(st.session_state.hpt_data["hora_termino"]) if st.session_state.hpt_data["hora_termino"] in RANGO_TERMINO else 0
             hora_termino = st.selectbox("Hora de Término", RANGO_TERMINO, index=idx_ht)
             
-            condicion_puerto = st.selectbox("Condición de Puerto", ["Abierto", "Cerrado para naves menores", "Cerrado total"])
+            opciones_puerto_hpt = ["Abierto", "Cerrado para naves menores", "Cerrado total"]
+            idx_puerto = opciones_puerto_hpt.index(st.session_state.hpt_data.get("condicion_puerto", "Abierto")) if st.session_state.hpt_data.get("condicion_puerto") in opciones_puerto_hpt else 0
+            condicion_puerto = st.selectbox("Condición de Puerto", opciones_puerto_hpt, index=idx_puerto)
             st.link_button("🌐 Revisar SITPORT (Directemar)", "https://sitport.directemar.cl/#/general", use_container_width=True)
             
             evidencia_img = None
@@ -1322,7 +1380,20 @@ elif st.session_state.current_page == 'hpt_nuevo':
         with col3: prev_1 = st.text_input("Prevención 1", value=st.session_state.hpt_data.get("prevencion_1", ""))
         with col4: prev_2 = st.text_input("Prevención 2", value=st.session_state.hpt_data.get("prevencion_2", ""))
             
-        opciones_faena = ["Inspeccion Red Lobera", "Inspeccion Red pecera", "Inspeccion Tensores", "Recuperacion inorganico", "Apoyo Centro de cultivo", "Extraccion de mortalidad", "Mantencion equipos", "Sin faena"]
+        # NUEVAS OPCIONES DE FAENA INTEGRADAS
+        opciones_faena = [
+            "Inspeccion Red Lobera",
+            "Inspeccion Red pecera",
+            "Inspeccion Tensores",
+            "Recuperacion inorganico",
+            "Apoyo Centro de cultivo",
+            "Apoyo team buceo",
+            "Extraccion de mortalidad",
+            "Mantencion equipos",
+            "Mantencion equipos rov",
+            "Malas condiciones climaticas",
+            "Sin faena"
+        ]
         
         if condicion_puerto == "Cerrado total":
             st.warning("⚠️ **Puerto Cerrado Total:** Se saltarán los pasos de EPP y ERC. La faena se registra como 'Sin faena'.")
@@ -1333,14 +1404,15 @@ elif st.session_state.current_page == 'hpt_nuevo':
             faena = st.selectbox("Faena a realizar", opciones_faena, index=idx_faena)
             tarea = st.text_area("Detalles de faena y lugar", value=st.session_state.hpt_data.get("tarea", ""), placeholder="Indique módulos, jaulas y tareas específicas...")
         
+        img_bytes_actual = evidencia_img.getvalue() if evidencia_img else st.session_state.hpt_data.get("evidencia_puerto")
+
         if st.button("SIGUIENTE ➡️", use_container_width=True):
-            img_bytes = evidencia_img.getvalue() if evidencia_img else st.session_state.hpt_data.get("evidencia_puerto")
             st.session_state.hpt_data.update({
                 "empresa": empresa, "fecha": fecha, "hora_inicio": hora_inicio, "hora_termino": hora_termino, 
                 "centro": centro, "area": area_asignada, "correo": correo, "encargado": encargado, "ponton": ponton, 
                 "condicion_puerto": condicion_puerto, "faena": faena, "tarea": tarea, 
                 "trabajo_rutinario": trabajo_rutinario,
-                "evidencia_puerto": img_bytes,
+                "evidencia_puerto": img_bytes_actual,
                 "prevencion_1": prev_1, "prevencion_2": prev_2
             })
             if condicion_puerto == "Cerrado total":
@@ -1348,6 +1420,16 @@ elif st.session_state.current_page == 'hpt_nuevo':
             else:
                 set_step(2)
             st.rerun()
+
+        # Función para sincronizar datos actuales si presiona Guardar Borrador en Paso 1
+        datos_paso_actual = {
+            "empresa": empresa, "fecha": fecha, "hora_inicio": hora_inicio, "hora_termino": hora_termino, 
+            "centro": centro, "area": area_asignada, "correo": correo, "encargado": encargado, "ponton": ponton, 
+            "condicion_puerto": condicion_puerto, "faena": faena, "tarea": tarea, 
+            "trabajo_rutinario": trabajo_rutinario,
+            "evidencia_puerto": img_bytes_actual,
+            "prevencion_1": prev_1, "prevencion_2": prev_2
+        }
 
     elif st.session_state.hpt_step == 2:
         st.subheader("Checklist EPP")
@@ -1364,15 +1446,17 @@ elif st.session_state.current_page == 'hpt_nuevo':
             epp_comunicacion = st.checkbox("Medios de Comunicación *", value=estado_epp[5])
             epp_botiquin = st.checkbox("Botiquín *", value=estado_epp[6])
             
+        datos_paso_actual = {"epp": [epp_guantes, epp_chaleco, epp_zapatos, epp_termica, epp_traje, epp_comunicacion, epp_botiquin]}
+
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
             if st.button("⬅️ ATRÁS", key="back2", use_container_width=True):
-                st.session_state.hpt_data["epp"] = [epp_guantes, epp_chaleco, epp_zapatos, epp_termica, epp_traje, epp_comunicacion, epp_botiquin]
+                st.session_state.hpt_data.update(datos_paso_actual)
                 set_step(1); st.rerun()
         with col_btn2:
             if st.button("SIGUIENTE ➡️", key="next2", use_container_width=True):
                 if not (epp_chaleco and epp_termica and epp_comunicacion and epp_botiquin): st.error("⚠️ No cumple con EPP mínimos.")
-                else: st.session_state.hpt_data["epp"] = [epp_guantes, epp_chaleco, epp_zapatos, epp_termica, epp_traje, epp_comunicacion, epp_botiquin]; set_step(3); st.rerun()
+                else: st.session_state.hpt_data.update(datos_paso_actual); set_step(3); st.rerun()
 
     elif st.session_state.hpt_step == 3:
         st.subheader("Evaluación de Riesgos y Controles")
@@ -1406,65 +1490,76 @@ elif st.session_state.current_page == 'hpt_nuevo':
             erc_navegacion = st.checkbox("Navegación Diurna/Nocturna", value=estado_erc[4])
             erc_atrapamiento = st.checkbox("Atrapamiento", value=estado_erc[5])
             
+        datos_paso_actual = {
+            "erc": [erc_izaje, erc_buceo, erc_electricos, erc_caidas, erc_navegacion, erc_atrapamiento],
+            "check_instruido": check_instruido, "check_clima": check_clima, 
+            "check_equipos": check_equipos, "check_orden": check_orden
+        }
+
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
             if st.button("⬅️ ATRÁS", key="back3", use_container_width=True):
-                st.session_state.hpt_data.update({
-                    "erc": [erc_izaje, erc_buceo, erc_electricos, erc_caidas, erc_navegacion, erc_atrapamiento],
-                    "check_instruido": check_instruido, "check_clima": check_clima, 
-                    "check_equipos": check_equipos, "check_orden": check_orden
-                })
+                st.session_state.hpt_data.update(datos_paso_actual)
                 set_step(2); st.rerun()
         with col_btn2:
             if st.button("SIGUIENTE ➡️", key="next3", use_container_width=True):
-                st.session_state.hpt_data.update({
-                    "erc": [erc_izaje, erc_buceo, erc_electricos, erc_caidas, erc_navegacion, erc_atrapamiento],
-                    "check_instruido": check_instruido, "check_clima": check_clima, 
-                    "check_equipos": check_equipos, "check_orden": check_orden
-                })
+                st.session_state.hpt_data.update(datos_paso_actual)
                 set_step(4); st.rerun()
 
     elif st.session_state.hpt_step == 4:
         st.subheader("Validación Final")
         with st.expander("Toma de Conocimiento", expanded=True):
-            tc_nombre = st.text_input("Nombre Difusión", value="Faena diaria")
+            tc_nombre = st.text_input("Nombre Difusión", value=st.session_state.hpt_data.get("tc_nombre", "Faena diaria"))
             col1, col2 = st.columns(2)
             with col1:
-                tc_fecha = st.date_input("Fecha Difusión")
+                tc_fecha = st.date_input("Fecha Difusión", value=st.session_state.hpt_data.get("tc_fecha", datetime.date.today()))
                 tc_relator = st.text_input("Nombre Relator (Piloto)", value=st.session_state.current_user)
                 
                 rut_defecto = st.session_state.db_usuarios.get(st.session_state.current_user, {}).get("rut", "")
                 tc_rut = st.text_input("RUT Relator", value=rut_defecto)
             with col2:
-                # AÑADIDO: Configurar por defecto las 07:45 en HPT
-                idx_hora = RANGO_HORA_DIFUSION.index("07:45") if "07:45" in RANGO_HORA_DIFUSION else 0
-                tc_hora = st.selectbox("Hora Difusión", RANGO_HORA_DIFUSION, index=idx_hora)
+                # HORA PREESTABLECIDA A LAS 07:45 CON TODAS LAS DEMÁS OPCIONES DISPONIBLES
+                hora_guardada = st.session_state.hpt_data.get("tc_hora", "07:45")
+                idx_hora_dif = RANGO_HORA_DIFUSION.index(hora_guardada) if hora_guardada in RANGO_HORA_DIFUSION else (RANGO_HORA_DIFUSION.index("07:45") if "07:45" in RANGO_HORA_DIFUSION else 0)
+                tc_hora = st.selectbox("Hora Difusión", RANGO_HORA_DIFUSION, index=idx_hora_dif)
                 
-                idx_dur = RANGO_DURACION.index(st.session_state.hpt_data["tc_duracion"]) if st.session_state.hpt_data["tc_duracion"] in RANGO_DURACION else 2
+                idx_dur = RANGO_DURACION.index(st.session_state.hpt_data.get("tc_duracion", "15 minutos")) if st.session_state.hpt_data.get("tc_duracion", "15 minutos") in RANGO_DURACION else 2
                 tc_duracion = st.selectbox("Duración Difusión", RANGO_DURACION, index=idx_dur)
                 
         with st.expander("Firmas de Responsabilidad", expanded=True):
             col_f1, col_f2 = st.columns(2)
-            
             with col_f1:
                 st.write("Firma Supervisor Servicio (Piloto)")
-                firma_sup_serv = st_canvas(stroke_width=2, stroke_color="#000", background_color="#FFF", height=150, width=300, key=f"firma_serv_{st.session_state.k_p}", return_image_data=True)
-                # AÑADIDO: Botón de reinicio firma piloto
-                if st.button("🔄 Reiniciar Firma Piloto", key="btn_cp", use_container_width=True):
-                    st.session_state.k_p += 1
+                firma_sup_serv = st_canvas(
+                    stroke_width=2, stroke_color="#000", background_color="#FFF",
+                    height=150, width=300,
+                    key=f"firma_serv_{st.session_state.reset_firma_piloto_hpt}",
+                    return_image_data=True
+                )
+                if st.button("🔄 Reiniciar Firma Piloto", key="btn_reset_piloto", use_container_width=True):
+                    st.session_state.reset_firma_piloto_hpt += 1
                     st.rerun()
-                    
             with col_f2:
                 st.write("Firma Encargado de Centro")
-                firma_encargado = st_canvas(stroke_width=2, stroke_color="#000", background_color="#FFF", height=150, width=300, key=f"firma_encargado_{st.session_state.k_e}", return_image_data=True)
-                # AÑADIDO: Botón de reinicio firma encargado
-                if st.button("🔄 Reiniciar Firma Encargado", key="btn_ce", use_container_width=True):
-                    st.session_state.k_e += 1
+                firma_encargado = st_canvas(
+                    stroke_width=2, stroke_color="#000", background_color="#FFF",
+                    height=150, width=300,
+                    key=f"firma_encargado_{st.session_state.reset_firma_encargado_hpt}",
+                    return_image_data=True
+                )
+                if st.button("🔄 Reiniciar Firma Encargado", key="btn_reset_encargado", use_container_width=True):
+                    st.session_state.reset_firma_encargado_hpt += 1
                     st.rerun()
+
+        datos_paso_actual = {
+            "tc_nombre": tc_nombre, "tc_fecha": tc_fecha,
+            "tc_hora": tc_hora, "tc_duracion": tc_duracion
+        }
 
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
             if st.button("⬅️ ATRÁS", key="back4", use_container_width=True): 
+                st.session_state.hpt_data.update(datos_paso_actual)
                 if st.session_state.hpt_data.get("condicion_puerto") == "Cerrado total":
                     set_step(1)
                 else:
@@ -1473,6 +1568,7 @@ elif st.session_state.current_page == 'hpt_nuevo':
                 
         with col_btn2:
             if st.button("GENERAR Y ALMACENAR HPT", type="primary", use_container_width=True):
+                st.session_state.hpt_data.update(datos_paso_actual)
                 data = st.session_state.hpt_data
                 barra_carga = st.progress(0, text="⚙️ Generando PDF...")
                 
@@ -1490,7 +1586,7 @@ elif st.session_state.current_page == 'hpt_nuevo':
                     pdf.set_fill_color(15, 55, 105); pdf.set_text_color(255, 255, 255)
                     pdf.cell(0, 10, "HERRAMIENTA DE PREVENCION EN TERRENO (HPT) - ROV", border=0, ln=True, align="C", fill=True)
                     
-                    hora_chile = datetime.datetime.utcnow() - datetime.timedelta(hours=4)
+                    hora_chile = obtener_hora_chile()
                     fecha_hora_actual = hora_chile.strftime("%Y-%m-%d %H:%M:%S")
                     pdf.set_font("Arial", "I", 8); pdf.set_text_color(128, 128, 128)
                     pdf.cell(0, 6, f"Sello de Auditoría Inmutable: Generado el {fecha_hora_actual} por {st.session_state.current_user}", border=0, ln=True, align="C")
@@ -1650,6 +1746,9 @@ elif st.session_state.current_page == 'hpt_nuevo':
                     try: supabase.table('hpt_history').insert(row_data).execute()
                     except Exception as db_err: st.error(f"⚠️ Error al guardar en BD: {db_err}"); st.session_state.local_hpt_history.append(row_data)
 
+                    # Si tenía un borrador guardado, se elimina al finalizar la HPT con éxito
+                    eliminar_borrador_usuario(st.session_state.current_user)
+
                     if os.path.exists(f_serv): os.remove(f_serv)
                     if os.path.exists(f_enc): os.remove(f_enc)
 
@@ -1671,6 +1770,7 @@ elif st.session_state.current_page == 'hpt_nuevo':
                     "correo": "", "encargado": "", "ponton": "", "condicion_puerto": "Abierto", "tarea": "",
                     "trabajo_rutinario": "Sí",
                     "epp": [False]*7, "faena": "Inspeccion Red pecera", "erc": [False]*6, "tc_duracion": "15 minutos",
+                    "tc_hora": "07:45", "tc_nombre": "Faena diaria", "tc_fecha": datetime.date.today(),
                     "check_instruido": "Sí", "check_clima": "Sí", "check_equipos": "Sí", "check_orden": "Sí",
                     "evidencia_puerto": None, "prevencion_1": "", "prevencion_2": ""
                 }
@@ -1678,6 +1778,20 @@ elif st.session_state.current_page == 'hpt_nuevo':
                 
             with open(st.session_state.hpt_pdf_generado, "rb") as pdf_file:
                 st.download_button(label="📥 Descargar Copia Local PDF", data=pdf_file, file_name=st.session_state.hpt_pdf_generado, mime="application/pdf", use_container_width=True)
+
+    # RENDERIZADO DE LOS BOTONES SUPERIORES (VOLVER Y GUARDAR BORRADOR EN CUALQUIER PASO)
+    with barra_superior:
+        col_top1, col_top2 = st.columns([2, 1])
+        with col_top1:
+            st.button("⬅️ Cancelar y Volver al Menú HPT", on_click=set_page, args=('hpt_menu',), use_container_width=True)
+        with col_top2:
+            if st.button("💾 GUARDAR BORRADOR (FIRMAR DESPUÉS)", use_container_width=True):
+                st.session_state.hpt_data.update(datos_paso_actual)
+                guardar_borrador_usuario(st.session_state.current_user, st.session_state.hpt_step, st.session_state.hpt_data)
+                st.success("✅ Avance guardado en borrador. Puedes salir y continuar más tarde desde el Menú HPT.")
+                time.sleep(1.2)
+                set_page('hpt_menu')
+                st.rerun()
 
 elif st.session_state.current_page == 'reporte_diario':
     st.button("⬅️ Volver al Menú Principal", on_click=set_page, args=('main_menu',))
@@ -1749,7 +1863,7 @@ elif st.session_state.current_page == 'reporte_diario':
     if submit_rd:
         barra_rd = st.progress(0, text="⚙️ Generando PDF...")
         
-        hora_chile = datetime.datetime.utcnow() - datetime.timedelta(hours=4)
+        hora_chile = obtener_hora_chile()
         fecha_str = hora_chile.strftime("%Y%m%d")
         hora_str = hora_chile.strftime("%H%M")
         
@@ -1795,7 +1909,7 @@ elif st.session_state.current_page == 'reporte_diario':
             pdf_rd.set_font("Arial", "B", 9); pdf_rd.cell(35, h_cell, "Rango Horario:", border=1); pdf_rd.set_font("Arial", "", 9); pdf_rd.cell(60, h_cell, f"{hora_inicio_rd} - {hora_termino_rd}", border=1, ln=True)
             
             pdf_rd.set_font("Arial", "B", 9); pdf_rd.cell(35, h_cell, "Piloto ROV:", border=1); pdf_rd.set_font("Arial", "", 9); pdf_rd.cell(60, h_cell, piloto_rd, border=1)
-            pdf_rd.set_font("Arial", "B", 9); pdf_rd.cell(35, h_cell, "Nombre Ponton:", border=1); pdf.set_font("Arial", "", 9); pdf_rd.cell(60, h_cell, ponton_rd, border=1, ln=True)
+            pdf_rd.set_font("Arial", "B", 9); pdf_rd.cell(35, h_cell, "Nombre Ponton:", border=1); pdf_rd.set_font("Arial", "", 9); pdf_rd.cell(60, h_cell, ponton_rd, border=1, ln=True)
             
             pdf_rd.set_font("Arial", "B", 9); pdf_rd.cell(35, h_cell, "Empresa:", border=1); pdf_rd.set_font("Arial", "", 9); pdf_rd.cell(60, h_cell, empresa_rd, border=1)
             pdf_rd.set_font("Arial", "B", 9); pdf_rd.cell(35, h_cell, "Centro Cultivo:", border=1); pdf_rd.set_font("Arial", "", 9); pdf_rd.cell(60, h_cell, centro_rd, border=1, ln=True)
@@ -2117,7 +2231,7 @@ elif st.session_state.current_page == 'entrega_turno':
             except:
                 correlativo_et = len(st.session_state.local_entrega_history) + 1
                 
-            hora_chile = datetime.datetime.utcnow() - datetime.timedelta(hours=4)
+            hora_chile = obtener_hora_chile()
             fecha_str = hora_chile.strftime("%Y%m%d")
             hora_str = hora_chile.strftime("%H%M")
             folio_et = f"ET-{fecha_str}-{correlativo_et:03d}-{hora_str}"

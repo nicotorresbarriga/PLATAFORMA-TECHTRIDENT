@@ -270,6 +270,10 @@ def obtener_datos_demo_entregas():
             "estado_controlador": "Bueno",
             "estado_umbilical": "Requiere cambio",
             "estado_equipamiento": "Bueno",
+            "motivo_rov": "",
+            "motivo_controlador": "",
+            "motivo_umbilical": "Corte superficial en cubierta a los 15 metros, requiere reemplazo urgente.",
+            "motivo_equipamiento": "",
             "herramientas_faltantes": ["Pelacables"],
             "materiales_faltantes": ["Tubos de grasa dieléctrica (Loctite)", "WD-40"],
             "alertas_centro": "Cable umbilical con corte superficial en los primeros 15 metros, requiere reemplazo urgente.",
@@ -291,6 +295,10 @@ def obtener_datos_demo_entregas():
             "estado_controlador": "Regular",
             "estado_umbilical": "Bueno",
             "estado_equipamiento": "Regular",
+            "motivo_rov": "Propulsor vertical trasero con vibración anómala y pérdida de potencia.",
+            "motivo_controlador": "Botón de iluminación intermitente, requiere revisión de contacto.",
+            "motivo_umbilical": "",
+            "motivo_equipamiento": "Silla plegable con soporte lateral suelto.",
             "herramientas_faltantes": [],
             "materiales_faltantes": ["Rollo de cinta de empalme (Splicing tape)"],
             "alertas_centro": "Propulsor vertical trasero del ROV 1 con vibración anómala y pérdida de potencia.",
@@ -312,6 +320,10 @@ def obtener_datos_demo_entregas():
             "estado_controlador": "Bueno",
             "estado_umbilical": "Regular",
             "estado_equipamiento": "Requiere cambio",
+            "motivo_rov": "Foco LED izquierdo con baja intensidad y leve condensación en domo.",
+            "motivo_controlador": "",
+            "motivo_umbilical": "Desgaste por roce en cubierta exterior cerca del conector.",
+            "motivo_equipamiento": "Carpa plegable rasgada por temporal de viento.",
             "herramientas_faltantes": ["Cuchillo de maniobra con funda (Bahco)", "Alicate de corte diagonal"],
             "materiales_faltantes": ["Frasco de vaselina", "Tapones para puerto de carga", "Limpia contacto"],
             "alertas_centro": "Carpa plegable rasgada por temporal de viento; falta stock de insumos básicos de mantención.",
@@ -333,6 +345,10 @@ def obtener_datos_demo_entregas():
             "estado_controlador": "Requiere cambio",
             "estado_umbilical": "Requiere cambio",
             "estado_equipamiento": "Bueno",
+            "motivo_rov": "",
+            "motivo_controlador": "Joystick derecho presenta deriva continua al soltar el mando.",
+            "motivo_umbilical": "Peladura profunda en cubierta con exposición de malla interna.",
+            "motivo_equipamiento": "",
             "herramientas_faltantes": [],
             "materiales_faltantes": ["Adhesivo industrial B-7000"],
             "alertas_centro": "Joystick derecho del controlador presenta deriva continua; umbilical con peladura.",
@@ -682,7 +698,7 @@ def parsear_lista_campo(valor):
     return [x.strip() for x in texto.split(",") if x.strip() and "ningun" not in x.lower()]
 
 def guardar_entrega_bd(datos_completos, datos_basicos):
-    """Guarda en local persistente y en Supabase con fallback automático si faltan columnas nuevas."""
+    """Guarda en local persistente y en Supabase con fallback escalonado si faltan columnas nuevas."""
     st.session_state.local_entrega_history.append(datos_completos)
     guardar_estado_persistente()
 
@@ -693,11 +709,21 @@ def guardar_entrega_bd(datos_completos, datos_basicos):
         supabase.table("entrega_history").insert(datos_completos).execute()
         return True, "Guardado completo en Supabase."
     except Exception:
+        # Fallback intermedio: conserva columnas previas sin los nuevos campos motivo_*/obs_*
+        cols_nuevas = {
+            "motivo_rov", "motivo_controlador", "motivo_umbilical",
+            "motivo_equipamiento", "obs_equipos", "obs_equipamiento"
+        }
+        datos_prev = {k: v for k, v in datos_completos.items() if k not in cols_nuevas}
         try:
-            supabase.table("entrega_history").insert(datos_basicos).execute()
-            return True, "Guardado en Supabase (esquema estándar) + detalle completo en plataforma."
-        except Exception as db_err:
-            return False, f"Error BD: {db_err}"
+            supabase.table("entrega_history").insert(datos_prev).execute()
+            return True, "Guardado en Supabase (esquema previo) + motivos guardados en plataforma."
+        except Exception:
+            try:
+                supabase.table("entrega_history").insert(datos_basicos).execute()
+                return True, "Guardado en Supabase (esquema estándar) + detalle completo en plataforma."
+            except Exception as db_err:
+                return False, f"Error BD: {db_err}"
 
 def calcular_alertas_criticas(registros):
     """Analiza todas las entregas y el estado de los centros para construir el listado de alertas críticas."""
@@ -786,8 +812,16 @@ def calcular_alertas_criticas(registros):
                 "detalle": f"Equipo afectado: {rov_falla} | Estado: {sev_f_raw} | Detalle: {det_f}",
             })
 
+        obs_eq_gen = val_seguro(r, "obs_equipos", "")
+        obs_eqp_gen = val_seguro(r, "obs_equipamiento", "")
+        alerta_gen = val_seguro(r, "alertas_centro", "")
+        if alerta_gen.lower() in ("ninguna", "sin novedades", "n/a", "no"):
+            alerta_gen = ""
+
         est_rov = val_seguro(r, "estado_rov", "")
         if est_rov in ["Requiere cambio", "Regular"]:
+            mot_r = val_seguro(r, "motivo_rov", "") or obs_eq_gen or alerta_gen
+            mot_r_txt = f" — Motivo: {mot_r}" if mot_r else " — Motivo: Sin detalle especificado."
             alertas.append({
                 "severidad": "CRÍTICA" if est_rov == "Requiere cambio" else "MEDIA",
                 "categoria": "ROV Dañado / Falla",
@@ -795,11 +829,13 @@ def calcular_alertas_criticas(registros):
                 "area": area,
                 "fecha": fecha,
                 "piloto": piloto,
-                "detalle": f"{rov_txt} reportado en estado '{est_rov}'.",
+                "detalle": f"{rov_txt} reportado en estado '{est_rov}'{mot_r_txt}",
             })
 
         est_umb = val_seguro(r, "estado_umbilical", "")
         if est_umb in ["Requiere cambio", "Regular"]:
+            mot_u = val_seguro(r, "motivo_umbilical", "") or obs_eq_gen or alerta_gen
+            mot_u_txt = f" — Motivo: {mot_u}" if mot_u else " — Motivo: Sin detalle especificado."
             alertas.append({
                 "severidad": "CRÍTICA" if est_umb == "Requiere cambio" else "MEDIA",
                 "categoria": "Cable Umbilical Dañado",
@@ -807,11 +843,13 @@ def calcular_alertas_criticas(registros):
                 "area": area,
                 "fecha": fecha,
                 "piloto": piloto,
-                "detalle": f"Cable umbilical ({rov_txt}) reportado en estado '{est_umb}'.",
+                "detalle": f"Cable umbilical ({rov_txt}) reportado en estado '{est_umb}'{mot_u_txt}",
             })
 
         est_ctrl = val_seguro(r, "estado_controlador", "")
         if est_ctrl in ["Requiere cambio", "Regular"]:
+            mot_c = val_seguro(r, "motivo_controlador", "") or obs_eq_gen or alerta_gen
+            mot_c_txt = f" — Motivo: {mot_c}" if mot_c else " — Motivo: Sin detalle especificado."
             alertas.append({
                 "severidad": "CRÍTICA" if est_ctrl == "Requiere cambio" else "MEDIA",
                 "categoria": "Controlador Dañado",
@@ -819,19 +857,21 @@ def calcular_alertas_criticas(registros):
                 "area": area,
                 "fecha": fecha,
                 "piloto": piloto,
-                "detalle": f"Controlador ({rov_txt}) reportado en estado '{est_ctrl}'.",
+                "detalle": f"Controlador ({rov_txt}) reportado en estado '{est_ctrl}'{mot_c_txt}",
             })
 
         est_eqp = val_seguro(r, "estado_equipamiento", "")
-        if est_eqp == "Requiere cambio":
+        if est_eqp in ["Requiere cambio", "Regular"]:
+            mot_e = val_seguro(r, "motivo_equipamiento", "") or obs_eqp_gen or alerta_gen
+            mot_e_txt = f" — Motivo: {mot_e}" if mot_e else " — Motivo: Sin detalle especificado."
             alertas.append({
-                "severidad": "ALTA",
+                "severidad": "ALTA" if est_eqp == "Requiere cambio" else "MEDIA",
                 "categoria": "Infraestructura / Equipamiento",
                 "centro": centro,
                 "area": area,
                 "fecha": fecha,
                 "piloto": piloto,
-                "detalle": "Equipamiento de terreno (carpa/caseta/silla/lona) requiere cambio.",
+                "detalle": f"Equipamiento de terreno reportado en estado '{est_eqp}'{mot_e_txt}",
             })
 
         mat_falt = parsear_lista_campo(r.get("materiales_faltantes"))
@@ -1215,6 +1255,15 @@ def generar_pdf_entrega(datos, logo_filename, nombre_archivo, firma_path=None, d
     pdf.cell(35, h_cell, "Cable Umbilical:", border=1)
     pdf.set_font("Arial", "", 9)
     pdf.cell(155, h_cell, limpiar_texto_pdf(str(d2.get("Cable_Umbilical", ""))), border=1, ln=True)
+    motivos_pdf = []
+    if d2.get("Motivo_ROV"):
+        motivos_pdf.append(f"ROV: {d2.get('Motivo_ROV')}")
+    if d2.get("Motivo_Controlador"):
+        motivos_pdf.append(f"Controlador: {d2.get('Motivo_Controlador')}")
+    if d2.get("Motivo_Umbilical"):
+        motivos_pdf.append(f"Umbilical: {d2.get('Motivo_Umbilical')}")
+    if motivos_pdf:
+        print_multiline("Motivos de Estado Regular / Requiere Cambio", " | ".join(motivos_pdf))
     if d2.get("ROV_Con_Falla") and str(d2.get("ROV_Con_Falla")).lower() not in ("", "sin fallas", "none"):
         pdf.set_fill_color(254, 226, 226)
         pdf.set_text_color(153, 27, 27)
@@ -1237,7 +1286,10 @@ def generar_pdf_entrega(datos, logo_filename, nombre_archivo, firma_path=None, d
     pdf.set_font("Arial", "B", 9)
     pdf.cell(45, h_cell, "Estado General:", border=1)
     pdf.set_font("Arial", "", 9)
-    pdf.cell(145, h_cell, limpiar_texto_pdf(str(d3.get("Estado_del_Equipamiento", ""))[:100]), border=1, ln=True)
+    estado_eqp_pdf = str(d3.get("Estado_del_Equipamiento", ""))
+    if d3.get("Motivo_Equipamiento"):
+        estado_eqp_pdf = f"{estado_eqp_pdf} - Motivo: {d3.get('Motivo_Equipamiento')}"
+    pdf.cell(145, h_cell, limpiar_texto_pdf(estado_eqp_pdf[:100]), border=1, ln=True)
     print_multiline("Observaciones de Infraestructura", d3.get("Observaciones_Equipamiento", ""))
     pdf.ln(4)
 
@@ -1472,7 +1524,7 @@ def render_gestion_rovs_piloto(centro_nombre):
                     f_ini_sel = datetime.date.fromisoformat(f_ini_sel)
                 except Exception:
                     f_ini_sel = hoy
-            nueva_fecha_inicio = st.date_input("Fecha inicio de uso", value=f_ini_sel, key=f"fini_gest_{centro_nombre}")
+            nueva_fecha_inicio = st.date_input("Fecha inicio de uso", value=f_ini_sel, key=f"fini_gest_{centro_nombre}_{nuevo_activo}")
 
         if st.button("💾 Guardar Equipo en Uso y Fecha de Inicio", type="primary", use_container_width=True):
             anterior_id = info_rovs["activo_id"]
@@ -1506,6 +1558,13 @@ def render_gestion_rovs_piloto(centro_nombre):
                     ed_nombre = st.text_input("Identificador", value=eq["nombre"])
                     ed_serie_rov = st.text_input("N° Serie ROV", value=eq["serie_rov"])
                     ed_serie_ctrl = st.text_input("N° Serie Controlador", value=eq["serie_ctrl"])
+                    f_ini_eq = eq.get("fecha_inicio_uso", hoy)
+                    if isinstance(f_ini_eq, str):
+                        try:
+                            f_ini_eq = datetime.date.fromisoformat(f_ini_eq)
+                        except Exception:
+                            f_ini_eq = hoy
+                    ed_inicio = st.date_input("Fecha Inicio de Uso", value=f_ini_eq)
                     f_mant = eq.get("mantencion", hoy)
                     if isinstance(f_mant, str):
                         try:
@@ -1518,6 +1577,7 @@ def render_gestion_rovs_piloto(centro_nombre):
                         equipos[rid]["nombre"] = ed_nombre
                         equipos[rid]["serie_rov"] = ed_serie_rov
                         equipos[rid]["serie_ctrl"] = ed_serie_ctrl
+                        equipos[rid]["fecha_inicio_uso"] = ed_inicio
                         equipos[rid]["mantencion"] = ed_mant
                         if cambio_mant:
                             st.session_state.historial_mantenciones.append({
@@ -1597,9 +1657,15 @@ def render_historial_entregas_centro(centro_nombre):
         titulo_exp = f"📅 {f_txt} | Saliente: {u_sal} ➔ Entrante: {u_ent} | {r_uso}"
         with st.expander(titulo_exp, expanded=(idx == 0)):
             c1, c2, c3 = st.columns(3)
-            c1.write(f"**Estado ROV (Uso):** {val_seguro(reg, 'estado_rov', 'No registrado')}")
-            c2.write(f"**Controlador:** {val_seguro(reg, 'estado_controlador', 'No registrado')}")
-            c3.write(f"**Cable Umbilical:** {val_seguro(reg, 'estado_umbilical', 'No registrado')}")
+            er_h = val_seguro(reg, "estado_rov", "No registrado")
+            mr_h = val_seguro(reg, "motivo_rov", "")
+            ec_h = val_seguro(reg, "estado_controlador", "No registrado")
+            mc_h = val_seguro(reg, "motivo_controlador", "")
+            eu_h = val_seguro(reg, "estado_umbilical", "No registrado")
+            mu_h = val_seguro(reg, "motivo_umbilical", "")
+            c1.write(f"**Estado ROV (Uso):** {er_h}" + (f" *(Motivo: {mr_h})*" if mr_h else ""))
+            c2.write(f"**Controlador:** {ec_h}" + (f" *(Motivo: {mc_h})*" if mc_h else ""))
+            c3.write(f"**Cable Umbilical:** {eu_h}" + (f" *(Motivo: {mu_h})*" if mu_h else ""))
             r_falla = val_seguro(reg, "rov_con_falla", "")
             if r_falla:
                 st.error(
@@ -1845,35 +1911,39 @@ def render_panel_gerencial_completo():
                     rovs_con_problemas_lista.append({
                         "Centro": cen, "Área": area_r, "Equipo con Falla": rov_f_esp,
                         "Componente": comp_esp, "Estado": sev_esp,
-                        "Fecha": fecha_r, "Observación": det_esp
+                        "Fecha": fecha_r, "Motivo / Observación": det_esp
                     })
 
+                obs_eq_g = val_seguro(r, "obs_equipos", "")
                 est_r_v = val_seguro(r, "estado_rov", "")
                 if est_r_v in ["Requiere cambio", "Regular"]:
                     conteo_fallas_tipo["ROV Dañado / Regular"] += 1
                     incidencias_reg += 1
+                    mot_r_g = val_seguro(r, "motivo_rov", "") or obs_eq_g or obs_r
                     rovs_con_problemas_lista.append({
                         "Centro": cen, "Área": area_r, "Equipo con Falla": rov_u,
                         "Componente": "ROV Principal", "Estado": est_r_v,
-                        "Fecha": fecha_r, "Observación": obs_r
+                        "Fecha": fecha_r, "Motivo / Observación": mot_r_g
                     })
                 est_u_v = val_seguro(r, "estado_umbilical", "")
                 if est_u_v in ["Requiere cambio", "Regular"]:
                     conteo_fallas_tipo["Cable Umbilical"] += 1
                     incidencias_reg += 1
+                    mot_u_g = val_seguro(r, "motivo_umbilical", "") or obs_eq_g or obs_r
                     rovs_con_problemas_lista.append({
                         "Centro": cen, "Área": area_r, "Equipo con Falla": rov_u,
                         "Componente": "Cable Umbilical", "Estado": est_u_v,
-                        "Fecha": fecha_r, "Observación": obs_r
+                        "Fecha": fecha_r, "Motivo / Observación": mot_u_g
                     })
                 est_c_v = val_seguro(r, "estado_controlador", "")
                 if est_c_v in ["Requiere cambio", "Regular"]:
                     conteo_fallas_tipo["Controlador"] += 1
                     incidencias_reg += 1
+                    mot_c_g = val_seguro(r, "motivo_controlador", "") or obs_eq_g or obs_r
                     rovs_con_problemas_lista.append({
                         "Centro": cen, "Área": area_r, "Equipo con Falla": rov_u,
                         "Componente": "Controlador", "Estado": est_c_v,
-                        "Fecha": fecha_r, "Observación": obs_r
+                        "Fecha": fecha_r, "Motivo / Observación": mot_c_g
                     })
                 if val_seguro(r, "estado_equipamiento", "") in ["Requiere cambio", "Regular"]:
                     conteo_fallas_tipo["Equipamiento Terreno"] += 1
@@ -2384,10 +2454,34 @@ elif st.session_state.current_page == "entrega_turno":
             f"**{rov_act['nombre']}** | N° Serie ROV: `{rov_act['serie_rov']}` <br>Controlador N° Serie: `{rov_act['serie_ctrl']}`",
             unsafe_allow_html=True
         )
+        f_ini_act = rov_act.get("fecha_inicio_uso", obtener_hora_chile().date())
+        if isinstance(f_ini_act, str):
+            try:
+                f_ini_act = datetime.date.fromisoformat(f_ini_act)
+            except Exception:
+                f_ini_act = obtener_hora_chile().date()
+        nueva_f_ini_act = st.date_input(
+            f"Fecha inicio de uso ({rov_act['nombre']})",
+            value=f_ini_act,
+            key=f"ini_act_{centro_et}_{info_rovs_et['activo_id']}"
+        )
+        if nueva_f_ini_act != f_ini_act:
+            equipos_et[info_rovs_et["activo_id"]]["fecha_inicio_uso"] = nueva_f_ini_act
+            guardar_estado_persistente()
+            st.success(f"✅ Fecha de inicio de uso de {rov_act['nombre']} actualizada.")
+            st.rerun()
+
         f_mant_act = rov_act.get("mantencion", obtener_hora_chile().date())
         if isinstance(f_mant_act, str):
-            f_mant_act = datetime.date.fromisoformat(f_mant_act)
-        nueva_fecha_act = st.date_input(f"Última mantención ({rov_act['nombre']})", value=f_mant_act, key=f"mant_act_{centro_et}")
+            try:
+                f_mant_act = datetime.date.fromisoformat(f_mant_act)
+            except Exception:
+                f_mant_act = obtener_hora_chile().date()
+        nueva_fecha_act = st.date_input(
+            f"Última mantención ({rov_act['nombre']})",
+            value=f_mant_act,
+            key=f"mant_act_{centro_et}_{info_rovs_et['activo_id']}"
+        )
         if nueva_fecha_act != f_mant_act:
             equipos_et[info_rovs_et["activo_id"]]["mantencion"] = nueva_fecha_act
             st.session_state.historial_mantenciones.append({
@@ -2407,10 +2501,34 @@ elif st.session_state.current_page == "entrega_turno":
                 f"**{rov_sby['nombre']}** | N° Serie ROV: `{rov_sby['serie_rov']}` <br>Controlador N° Serie: `{rov_sby['serie_ctrl']}`",
                 unsafe_allow_html=True
             )
+            f_ini_sby = rov_sby.get("fecha_inicio_uso", obtener_hora_chile().date())
+            if isinstance(f_ini_sby, str):
+                try:
+                    f_ini_sby = datetime.date.fromisoformat(f_ini_sby)
+                except Exception:
+                    f_ini_sby = obtener_hora_chile().date()
+            nueva_f_ini_sby = st.date_input(
+                f"Fecha inicio de uso ({rov_sby['nombre']})",
+                value=f_ini_sby,
+                key=f"ini_sby_{centro_et}_{rov_sby_ids[0]}"
+            )
+            if nueva_f_ini_sby != f_ini_sby:
+                equipos_et[rov_sby_ids[0]]["fecha_inicio_uso"] = nueva_f_ini_sby
+                guardar_estado_persistente()
+                st.success(f"✅ Fecha de inicio de uso de {rov_sby['nombre']} actualizada.")
+                st.rerun()
+
             f_mant_sby = rov_sby.get("mantencion", obtener_hora_chile().date())
             if isinstance(f_mant_sby, str):
-                f_mant_sby = datetime.date.fromisoformat(f_mant_sby)
-            nueva_fecha_sby = st.date_input(f"Última mantención ({rov_sby['nombre']})", value=f_mant_sby, key=f"mant_sby_{centro_et}")
+                try:
+                    f_mant_sby = datetime.date.fromisoformat(f_mant_sby)
+                except Exception:
+                    f_mant_sby = obtener_hora_chile().date()
+            nueva_fecha_sby = st.date_input(
+                f"Última mantención ({rov_sby['nombre']})",
+                value=f_mant_sby,
+                key=f"mant_sby_{centro_et}_{rov_sby_ids[0]}"
+            )
             if nueva_fecha_sby != f_mant_sby:
                 equipos_et[rov_sby_ids[0]]["mantencion"] = nueva_fecha_sby
                 st.session_state.historial_mantenciones.append({
@@ -2428,10 +2546,31 @@ elif st.session_state.current_page == "entrega_turno":
     c6, c7, c8 = st.columns(3)
     with c6:
         estado_equipo = st.selectbox("Estado General del ROV en Uso", ["Bueno", "Regular", "Requiere cambio"])
+        motivo_rov = ""
+        if estado_equipo != "Bueno":
+            motivo_rov = st.text_input(
+                "Motivo estado ROV *",
+                placeholder="Ej: Propulsor con vibración, foco LED apagado...",
+                key=f"mot_rov_{centro_et}"
+            )
     with c7:
         estado_controlador = st.selectbox("Estado del Controlador en Uso", ["Bueno", "Regular", "Requiere cambio"])
+        motivo_controlador = ""
+        if estado_controlador != "Bueno":
+            motivo_controlador = st.text_input(
+                "Motivo estado Controlador *",
+                placeholder="Ej: Joystick con deriva, pantalla con falla...",
+                key=f"mot_ctrl_{centro_et}"
+            )
     with c8:
         estado_umbilical = st.selectbox("Estado del Cable Umbilical", ["Bueno", "Regular", "Requiere cambio"])
+        motivo_umbilical = ""
+        if estado_umbilical != "Bueno":
+            motivo_umbilical = st.text_input(
+                "Motivo estado Cable Umbilical *",
+                placeholder="Ej: Corte en cubierta a los 15m, conector dañado...",
+                key=f"mot_umb_{centro_et}"
+            )
     obs_equipos = st.text_area("Observaciones Generales de los Equipos", placeholder="Detalle observaciones generales...")
 
     with st.container(border=True):
@@ -2490,6 +2629,13 @@ elif st.session_state.current_page == "entrega_turno":
         lona = st.checkbox("Lona")
     with c14:
         estado_equipamiento = st.selectbox("Estado del Equipamiento", ["Bueno", "Regular", "Requiere cambio"])
+    motivo_equipamiento = ""
+    if estado_equipamiento != "Bueno":
+        motivo_equipamiento = st.text_input(
+            "Motivo estado Equipamiento de Terreno *",
+            placeholder="Ej: Carpa rasgada por viento, silla rota, falta lona...",
+            key=f"mot_eqp_{centro_et}"
+        )
     obs_equipamiento = st.text_area("Observaciones del Equipamiento", placeholder="Detalle daños...")
 
     st.markdown("---")
@@ -2614,10 +2760,22 @@ elif st.session_state.current_page == "entrega_turno":
     correo_destino_et = st.text_input("Correo electrónico del destinatario", value=correo_defecto_et)
 
     if st.button("Guardar, Generar PDF y Enviar", type="primary", use_container_width=True):
+        motivos_faltantes = []
+        if estado_equipo != "Bueno" and not motivo_rov.strip():
+            motivos_faltantes.append(f"ROV en Uso ({estado_equipo})")
+        if estado_controlador != "Bueno" and not motivo_controlador.strip():
+            motivos_faltantes.append(f"Controlador ({estado_controlador})")
+        if estado_umbilical != "Bueno" and not motivo_umbilical.strip():
+            motivos_faltantes.append(f"Cable Umbilical ({estado_umbilical})")
+        if estado_equipamiento != "Bueno" and not motivo_equipamiento.strip():
+            motivos_faltantes.append(f"Equipamiento de Terreno ({estado_equipamiento})")
+
         if not piloto_saliente or not piloto_entrante:
             st.error("Error: Los campos 'Piloto Entrante' y 'Piloto Saliente' son obligatorios.")
         elif not correo_destino_et:
             st.error("Error: Ingrese el correo del destinatario.")
+        elif motivos_faltantes:
+            st.error(f"⚠️ Debe indicar el motivo para los elementos marcados como Regular o Requiere cambio: {', '.join(motivos_faltantes)}.")
         else:
             barra_et = st.progress(0, text="⚙️ Compilando Entrega de Turno...")
             lista_equipamiento = [
@@ -2641,12 +2799,15 @@ elif st.session_state.current_page == "entrega_turno":
                     "ROV_En_Uso": rov_uso_str, "ROV_Stand_by": rov_sby_str,
                     "Estado_General_ROV": estado_equipo, "Estado_Controlador": estado_controlador,
                     "Cable_Umbilical": estado_umbilical, "Observaciones_Equipos": obs_equipos,
+                    "Motivo_ROV": motivo_rov.strip(), "Motivo_Controlador": motivo_controlador.strip(),
+                    "Motivo_Umbilical": motivo_umbilical.strip(),
                     "ROV_Con_Falla": rov_con_falla_str, "Componente_Falla": componente_falla_str,
                     "Severidad_Falla": severidad_falla_str, "Detalle_Falla": detalle_falla_str
                 },
                 "3. Terreno": {
                     "Equipamiento_Presente": txt_equipamiento,
                     "Estado_del_Equipamiento": estado_equipamiento,
+                    "Motivo_Equipamiento": motivo_equipamiento.strip(),
                     "Observaciones_Equipamiento": obs_equipamiento
                 },
                 "4. Herramientas": {
@@ -2729,6 +2890,12 @@ elif st.session_state.current_page == "entrega_turno":
                     "alertas_centro": alertas_et,
                     "tareas_pendientes": pendientes_et,
                     "faena_realizada": faena_et,
+                    "motivo_rov": motivo_rov.strip(),
+                    "motivo_controlador": motivo_controlador.strip(),
+                    "motivo_umbilical": motivo_umbilical.strip(),
+                    "motivo_equipamiento": motivo_equipamiento.strip(),
+                    "obs_equipos": obs_equipos.strip(),
+                    "obs_equipamiento": obs_equipamiento.strip(),
                     "rov_con_falla": rov_con_falla_str,
                     "componente_falla": componente_falla_str,
                     "severidad_falla": severidad_falla_str,

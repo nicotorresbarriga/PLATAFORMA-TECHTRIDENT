@@ -131,6 +131,37 @@ def limpiar_texto_pdf(texto):
         return ""
     return str(texto).encode("latin-1", "replace").decode("latin-1")
 
+def val_seguro(dic, clave, defecto="Sin registro"):
+    """Retorna un texto limpio evitando mostrar None, NaN o vacíos."""
+    if not isinstance(dic, dict):
+        return defecto
+    val = dic.get(clave, None)
+    if val is None:
+        return defecto
+    try:
+        if pd.isna(val):
+            return defecto
+    except Exception:
+        pass
+    txt = str(val).strip()
+    if not txt or txt.lower() in ("none", "nan", "null"):
+        return defecto
+    return txt
+
+def limpiar_df_vista(df, col_url="url_documento"):
+    """Reemplaza valores None/NaN/vacíos por '—' para evitar 'None' en tablas."""
+    df_clean = df.copy()
+    for col in df_clean.columns:
+        if col == col_url:
+            df_clean[col] = df_clean[col].apply(
+                lambda x: str(x).strip() if pd.notnull(x) and str(x).strip().startswith("http") else None
+            )
+        else:
+            df_clean[col] = df_clean[col].apply(
+                lambda x: "—" if (x is None or (isinstance(x, float) and pd.isna(x)) or str(x).strip().lower() in ("", "none", "nan", "null")) else str(x)
+            )
+    return df_clean
+
 def crear_canvas_firma(**kwargs):
     """Wrapper compatible con streamlit-drawable-canvas 0.9.x y 0.10.x+."""
     try:
@@ -480,7 +511,7 @@ if "current_page" not in st.session_state:
 if "admin_view_mode" not in st.session_state:
     st.session_state.admin_view_mode = "gerencia"  # 'gerencia' | 'piloto_demo' | 'suite_completa'
 if "usar_datos_demo" not in st.session_state:
-    st.session_state.usar_datos_demo = True
+    st.session_state.usar_datos_demo = False
 if "centro_piloto_activo" not in st.session_state:
     st.session_state.centro_piloto_activo = "Centro Punta Vergara"
 if "hpt_step" not in st.session_state:
@@ -732,13 +763,30 @@ def calcular_alertas_criticas(registros):
 
     # C. Alertas derivadas de las Entregas de Turno
     for r in registros:
-        centro = r.get("centro", "Desconocido")
-        area = r.get("area", st.session_state.db_centros_areas.get(centro, "N/A"))
-        fecha = str(r.get("fecha", ""))
-        piloto = r.get("usuario", "N/A")
-        rov_txt = r.get("rov_en_uso", "ROV")
+        centro = val_seguro(r, "centro", "Desconocido")
+        area = val_seguro(r, "area", st.session_state.db_centros_areas.get(centro, "N/A"))
+        fecha = val_seguro(r, "fecha", "Sin fecha")
+        piloto = val_seguro(r, "usuario", "N/A")
+        rov_txt = val_seguro(r, "rov_en_uso", "ROV en uso")
 
-        est_rov = str(r.get("estado_rov", "")).strip()
+        # Falla específica reportada en cualquier ROV (En Uso o Stand-by)
+        rov_falla = val_seguro(r, "rov_con_falla", "")
+        if rov_falla and rov_falla.lower() not in ("sin fallas", "ninguno", "n/a"):
+            comp_f = val_seguro(r, "componente_falla", "Equipo ROV")
+            sev_f_raw = val_seguro(r, "severidad_falla", "Requiere cambio")
+            det_f = val_seguro(r, "detalle_falla", "Sin detalle adicional.")
+            sev_nivel = "CRÍTICA" if ("requiere" in sev_f_raw.lower() or "fuera" in sev_f_raw.lower()) else "ALTA"
+            alertas.append({
+                "severidad": sev_nivel,
+                "categoria": f"Falla Específica ROV ({comp_f})",
+                "centro": centro,
+                "area": area,
+                "fecha": fecha,
+                "piloto": piloto,
+                "detalle": f"Equipo afectado: {rov_falla} | Estado: {sev_f_raw} | Detalle: {det_f}",
+            })
+
+        est_rov = val_seguro(r, "estado_rov", "")
         if est_rov in ["Requiere cambio", "Regular"]:
             alertas.append({
                 "severidad": "CRÍTICA" if est_rov == "Requiere cambio" else "MEDIA",
@@ -750,7 +798,7 @@ def calcular_alertas_criticas(registros):
                 "detalle": f"{rov_txt} reportado en estado '{est_rov}'.",
             })
 
-        est_umb = str(r.get("estado_umbilical", "")).strip()
+        est_umb = val_seguro(r, "estado_umbilical", "")
         if est_umb in ["Requiere cambio", "Regular"]:
             alertas.append({
                 "severidad": "CRÍTICA" if est_umb == "Requiere cambio" else "MEDIA",
@@ -762,7 +810,7 @@ def calcular_alertas_criticas(registros):
                 "detalle": f"Cable umbilical ({rov_txt}) reportado en estado '{est_umb}'.",
             })
 
-        est_ctrl = str(r.get("estado_controlador", "")).strip()
+        est_ctrl = val_seguro(r, "estado_controlador", "")
         if est_ctrl in ["Requiere cambio", "Regular"]:
             alertas.append({
                 "severidad": "CRÍTICA" if est_ctrl == "Requiere cambio" else "MEDIA",
@@ -774,7 +822,7 @@ def calcular_alertas_criticas(registros):
                 "detalle": f"Controlador ({rov_txt}) reportado en estado '{est_ctrl}'.",
             })
 
-        est_eqp = str(r.get("estado_equipamiento", "")).strip()
+        est_eqp = val_seguro(r, "estado_equipamiento", "")
         if est_eqp == "Requiere cambio":
             alertas.append({
                 "severidad": "ALTA",
@@ -804,7 +852,7 @@ def calcular_alertas_criticas(registros):
                 "detalle": " | ".join(partes),
             })
 
-        alerta_txt = str(r.get("alertas_centro", "")).strip()
+        alerta_txt = val_seguro(r, "alertas_centro", "")
         if alerta_txt and alerta_txt.lower() not in ["ninguna", "sin novedades", "n/a", "no"]:
             alertas.append({
                 "severidad": "ALTA",
@@ -1167,6 +1215,14 @@ def generar_pdf_entrega(datos, logo_filename, nombre_archivo, firma_path=None, d
     pdf.cell(35, h_cell, "Cable Umbilical:", border=1)
     pdf.set_font("Arial", "", 9)
     pdf.cell(155, h_cell, limpiar_texto_pdf(str(d2.get("Cable_Umbilical", ""))), border=1, ln=True)
+    if d2.get("ROV_Con_Falla") and str(d2.get("ROV_Con_Falla")).lower() not in ("", "sin fallas", "none"):
+        pdf.set_fill_color(254, 226, 226)
+        pdf.set_text_color(153, 27, 27)
+        pdf.set_font("Arial", "B", 9)
+        pdf.cell(190, h_cell, limpiar_texto_pdf(f" REPORTE ESPECIFICO DE FALLA: {d2.get('ROV_Con_Falla')}"), border=1, ln=True, fill=True)
+        pdf.set_text_color(0, 0, 0)
+        print_row_2("Componente:", d2.get("Componente_Falla", ""), "Severidad:", d2.get("Severidad_Falla", ""))
+        print_multiline("Detalle Tecnico de la Falla", d2.get("Detalle_Falla", ""))
     print_multiline("Observaciones de Equipos", d2.get("Observaciones_Equipos", ""))
     pdf.ln(4)
 
@@ -1522,8 +1578,8 @@ def render_historial_entregas_centro(centro_nombre):
         st.warning(f"Aún no se registran entregas de turno históricas para **{centro_consulta}**.")
         return
 
-    df_c = pd.DataFrame(del_centro)
-    cols_pref = ["fecha", "usuario", "piloto_entrante", "rov_en_uso", "estado_rov", "estado_umbilical", "alertas_centro", "url_documento"]
+    df_c = limpiar_df_vista(pd.DataFrame(del_centro))
+    cols_pref = ["fecha", "usuario", "piloto_entrante", "rov_en_uso", "rov_con_falla", "estado_rov", "estado_umbilical", "alertas_centro", "url_documento"]
     cols_ok = [c for c in cols_pref if c in df_c.columns]
 
     st.dataframe(
@@ -1534,24 +1590,39 @@ def render_historial_entregas_centro(centro_nombre):
 
     st.subheader("🔎 Detalle de Entregas del Centro (Traspaso entre Contraturnos)")
     for idx, reg in enumerate(del_centro[:10]):
-        titulo_exp = f"📅 {reg.get('fecha', 'S/F')} | Saliente: {reg.get('usuario', 'N/A')} ➔ Entrante: {reg.get('piloto_entrante', 'N/A')} | {reg.get('rov_en_uso', 'ROV')}"
+        f_txt = val_seguro(reg, "fecha", "S/F")
+        u_sal = val_seguro(reg, "usuario", "Sin registro")
+        u_ent = val_seguro(reg, "piloto_entrante", "Sin registro")
+        r_uso = val_seguro(reg, "rov_en_uso", "ROV")
+        titulo_exp = f"📅 {f_txt} | Saliente: {u_sal} ➔ Entrante: {u_ent} | {r_uso}"
         with st.expander(titulo_exp, expanded=(idx == 0)):
             c1, c2, c3 = st.columns(3)
-            c1.write(f"**Estado ROV:** {reg.get('estado_rov', 'No registrado')}")
-            c2.write(f"**Controlador:** {reg.get('estado_controlador', 'No registrado')}")
-            c3.write(f"**Cable Umbilical:** {reg.get('estado_umbilical', 'No registrado')}")
-            if reg.get("faena_realizada"):
-                st.write(f"**Faena Realizada:** {reg.get('faena_realizada')}")
-            if reg.get("tareas_pendientes"):
-                st.info(f"📌 **Tareas Pendientes para el turno entrante:** {reg.get('tareas_pendientes')}")
-            if reg.get("alertas_centro"):
-                st.warning(f"⚠️ **Alertas del Centro:** {reg.get('alertas_centro')}")
+            c1.write(f"**Estado ROV (Uso):** {val_seguro(reg, 'estado_rov', 'No registrado')}")
+            c2.write(f"**Controlador:** {val_seguro(reg, 'estado_controlador', 'No registrado')}")
+            c3.write(f"**Cable Umbilical:** {val_seguro(reg, 'estado_umbilical', 'No registrado')}")
+            r_falla = val_seguro(reg, "rov_con_falla", "")
+            if r_falla:
+                st.error(
+                    f"🔧 **Falla reportada en {r_falla}** | Componente: {val_seguro(reg, 'componente_falla', 'ROV')} "
+                    f"| Severidad: {val_seguro(reg, 'severidad_falla', 'Alerta')}\n\n"
+                    f"Detalle: {val_seguro(reg, 'detalle_falla', 'Sin detalle')}"
+                )
+            faena_r = val_seguro(reg, "faena_realizada", "")
+            if faena_r:
+                st.write(f"**Faena Realizada:** {faena_r}")
+            pend_r = val_seguro(reg, "tareas_pendientes", "")
+            if pend_r:
+                st.info(f"📌 **Tareas Pendientes para el turno entrante:** {pend_r}")
+            alerta_r = val_seguro(reg, "alertas_centro", "")
+            if alerta_r:
+                st.warning(f"⚠️ **Alertas del Centro:** {alerta_r}")
             mat_f = parsear_lista_campo(reg.get("materiales_faltantes"))
             her_f = parsear_lista_campo(reg.get("herramientas_faltantes"))
             if mat_f or her_f:
                 st.error(f"🧰 **Faltantes reportados:** Herramientas: {', '.join(her_f) if her_f else 'Ninguna'} | Insumos: {', '.join(mat_f) if mat_f else 'Ninguno'}")
-            if reg.get("url_documento"):
-                st.link_button("📥 Abrir / Descargar PDF Original", reg["url_documento"])
+            url_r = val_seguro(reg, "url_documento", "")
+            if url_r.startswith("http"):
+                st.link_button("📥 Abrir / Descargar PDF Original", url_r)
 
 
 def render_panel_gerencial_completo():
@@ -1573,7 +1644,10 @@ def render_panel_gerencial_completo():
 
     alertas_criticas = [a for a in alertas if a["severidad"] == "CRÍTICA"]
     centros_rov_problema = sorted(list(set(
-        a["centro"] for a in alertas if a["categoria"] in ["ROV Dañado / Falla", "Cable Umbilical Dañado", "Controlador Dañado"]
+        a["centro"] for a in alertas if (
+            a["categoria"] in ["ROV Dañado / Falla", "Cable Umbilical Dañado", "Controlador Dañado"]
+            or a["categoria"].startswith("Falla Específica ROV")
+        )
     )))
     entregas_pendientes_fin = [a for a in alertas if a["categoria"] == "Entrega de Turno Pendiente"]
 
@@ -1677,12 +1751,13 @@ def render_panel_gerencial_completo():
 
             cols_ver = [
                 "fecha", "centro", "area", "usuario", "piloto_entrante",
-                "rov_en_uso", "estado_rov", "estado_controlador", "estado_umbilical",
+                "rov_en_uso", "rov_con_falla", "componente_falla",
+                "estado_rov", "estado_controlador", "estado_umbilical",
                 "alertas_centro", "url_documento"
             ]
             cols_ver = [c for c in cols_ver if c in df_f.columns]
             st.dataframe(
-                df_f[cols_ver],
+                limpiar_df_vista(df_f[cols_ver]),
                 column_config={"url_documento": st.column_config.LinkColumn("Enlace PDF", display_text="📥 Descargar PDF")},
                 use_container_width=True
             )
@@ -1746,35 +1821,61 @@ def render_panel_gerencial_completo():
             rovs_con_problemas_lista = []
 
             for r in registros:
-                cen = r.get("centro", "Desconocido")
-                area_r = r.get("area", st.session_state.db_centros_areas.get(cen, "N/A"))
+                cen = val_seguro(r, "centro", "Desconocido")
+                area_r = val_seguro(r, "area", st.session_state.db_centros_areas.get(cen, "N/A"))
+                rov_u = val_seguro(r, "rov_en_uso", "ROV")
+                fecha_r = val_seguro(r, "fecha", "Sin fecha")
+                obs_r = val_seguro(r, "alertas_centro", "Sin detalle")
                 incidencias_reg = 0
 
-                if str(r.get("estado_rov", "")) in ["Requiere cambio", "Regular"]:
+                # Falla reportada explícitamente sobre un ROV específico (En Uso o Stand-by)
+                rov_f_esp = val_seguro(r, "rov_con_falla", "")
+                if rov_f_esp and rov_f_esp.lower() not in ("sin fallas", "ninguno", "n/a"):
+                    comp_esp = val_seguro(r, "componente_falla", "ROV Principal")
+                    sev_esp = val_seguro(r, "severidad_falla", "Requiere cambio")
+                    det_esp = val_seguro(r, "detalle_falla", obs_r)
+                    comp_low = comp_esp.lower()
+                    if "umbilical" in comp_low:
+                        conteo_fallas_tipo["Cable Umbilical"] += 1
+                    elif "controlador" in comp_low:
+                        conteo_fallas_tipo["Controlador"] += 1
+                    else:
+                        conteo_fallas_tipo["ROV Dañado / Regular"] += 1
+                    incidencias_reg += 1
+                    rovs_con_problemas_lista.append({
+                        "Centro": cen, "Área": area_r, "Equipo con Falla": rov_f_esp,
+                        "Componente": comp_esp, "Estado": sev_esp,
+                        "Fecha": fecha_r, "Observación": det_esp
+                    })
+
+                est_r_v = val_seguro(r, "estado_rov", "")
+                if est_r_v in ["Requiere cambio", "Regular"]:
                     conteo_fallas_tipo["ROV Dañado / Regular"] += 1
                     incidencias_reg += 1
                     rovs_con_problemas_lista.append({
-                        "Centro": cen, "Área": area_r, "Equipo": r.get("rov_en_uso", "ROV"),
-                        "Componente": "ROV Principal", "Estado": r.get("estado_rov"),
-                        "Fecha": r.get("fecha"), "Observación": r.get("alertas_centro", "Sin detalle")
+                        "Centro": cen, "Área": area_r, "Equipo con Falla": rov_u,
+                        "Componente": "ROV Principal", "Estado": est_r_v,
+                        "Fecha": fecha_r, "Observación": obs_r
                     })
-                if str(r.get("estado_umbilical", "")) in ["Requiere cambio", "Regular"]:
+                est_u_v = val_seguro(r, "estado_umbilical", "")
+                if est_u_v in ["Requiere cambio", "Regular"]:
                     conteo_fallas_tipo["Cable Umbilical"] += 1
                     incidencias_reg += 1
                     rovs_con_problemas_lista.append({
-                        "Centro": cen, "Área": area_r, "Equipo": r.get("rov_en_uso", "ROV"),
-                        "Componente": "Cable Umbilical", "Estado": r.get("estado_umbilical"),
-                        "Fecha": r.get("fecha"), "Observación": r.get("alertas_centro", "Sin detalle")
+                        "Centro": cen, "Área": area_r, "Equipo con Falla": rov_u,
+                        "Componente": "Cable Umbilical", "Estado": est_u_v,
+                        "Fecha": fecha_r, "Observación": obs_r
                     })
-                if str(r.get("estado_controlador", "")) in ["Requiere cambio", "Regular"]:
+                est_c_v = val_seguro(r, "estado_controlador", "")
+                if est_c_v in ["Requiere cambio", "Regular"]:
                     conteo_fallas_tipo["Controlador"] += 1
                     incidencias_reg += 1
                     rovs_con_problemas_lista.append({
-                        "Centro": cen, "Área": area_r, "Equipo": r.get("rov_en_uso", "ROV"),
-                        "Componente": "Controlador", "Estado": r.get("estado_controlador"),
-                        "Fecha": r.get("fecha"), "Observación": r.get("alertas_centro", "Sin detalle")
+                        "Centro": cen, "Área": area_r, "Equipo con Falla": rov_u,
+                        "Componente": "Controlador", "Estado": est_c_v,
+                        "Fecha": fecha_r, "Observación": obs_r
                     })
-                if str(r.get("estado_equipamiento", "")) in ["Requiere cambio", "Regular"]:
+                if val_seguro(r, "estado_equipamiento", "") in ["Requiere cambio", "Regular"]:
                     conteo_fallas_tipo["Equipamiento Terreno"] += 1
                     incidencias_reg += 1
                 if parsear_lista_campo(r.get("materiales_faltantes")):
@@ -1840,8 +1941,8 @@ def render_panel_gerencial_completo():
 
     # ---- TAB 4: ADMINISTRACIÓN ----
     with tab_admin:
-        sub_p, sub_c, sub_r, sub_h = st.tabs([
-            "👨‍✈️ Pilotos", "⚓ Centros y Fin de Faena", "🤖 Flota ROV", "📜 Historial Mantenciones / Rotaciones"
+        sub_p, sub_c, sub_r, sub_h, sub_reset = st.tabs([
+            "👨‍✈️ Pilotos", "⚓ Centros y Fin de Faena", "🤖 Flota ROV", "📜 Historial Mantenciones / Rotaciones", "🧹 Reinicio Oficial"
         ])
 
         with sub_p:
@@ -1976,6 +2077,49 @@ def render_panel_gerencial_completo():
                 st.dataframe(pd.DataFrame(st.session_state.historial_rotaciones), use_container_width=True)
             else:
                 st.info("Sin rotaciones registradas aún.")
+
+        with sub_reset:
+            st.subheader("🧹 Limpieza de Registros de Prueba (Puesta en Marcha Oficial)")
+            st.warning(
+                "⚠️ Esta acción elimina todos los registros históricos de prueba (Entregas de Turno, HPT, Reportes Diarios, "
+                "Mantenciones y Rotaciones locales) para dejar la plataforma en cero lista para operación oficial."
+            )
+            pin_reset = st.text_input("PIN de Administrador para confirmar reinicio", type="password", key="pin_reset_oficial")
+            confirm_reset = st.checkbox("Confirmo que deseo borrar todos los registros de prueba anteriores.", key="chk_reset_oficial")
+            if st.button("🗑️ LIMPIAR REGISTROS Y DEJAR APP COMO NUEVA", type="primary", use_container_width=True):
+                if pin_reset != CLAVE_ADMIN:
+                    st.error("PIN incorrecto.")
+                elif not confirm_reset:
+                    st.error("Debe marcar la casilla de confirmación.")
+                else:
+                    st.session_state.local_entrega_history = []
+                    st.session_state.local_hpt_history = []
+                    st.session_state.local_reportes_history = []
+                    st.session_state.historial_mantenciones = []
+                    st.session_state.historial_rotaciones = []
+                    st.session_state.usar_datos_demo = False
+                    if os.path.exists(ARCHIVO_BORRADORES):
+                        try:
+                            os.remove(ARCHIVO_BORRADORES)
+                        except Exception:
+                            pass
+                    guardar_estado_persistente()
+                    errores_supa = []
+                    if supabase is not None:
+                        for tbl in ("entrega_history", "hpt_history", "reportes_history"):
+                            try:
+                                supabase.table(tbl).delete().neq("id", -1).execute()
+                            except Exception as e_del:
+                                errores_supa.append(f"{tbl}: {e_del}")
+                    if errores_supa:
+                        st.warning(
+                            "✅ Datos locales limpiados. En Supabase algunas tablas están protegidas por RLS; "
+                            "ejecute el comando SQL `TRUNCATE TABLE entrega_history, hpt_history, reportes_history RESTART IDENTITY;` en Supabase SQL Editor."
+                        )
+                    else:
+                        st.success("✅ Todos los registros locales y de Supabase fueron eliminados. ¡Plataforma lista como nueva!")
+                    time.sleep(1.5)
+                    st.rerun()
 
 
 # ==============================================================================
@@ -2288,7 +2432,49 @@ elif st.session_state.current_page == "entrega_turno":
         estado_controlador = st.selectbox("Estado del Controlador en Uso", ["Bueno", "Regular", "Requiere cambio"])
     with c8:
         estado_umbilical = st.selectbox("Estado del Cable Umbilical", ["Bueno", "Regular", "Requiere cambio"])
-    obs_equipos = st.text_area("Observaciones de los Equipos", placeholder="Detalle fallas...")
+    obs_equipos = st.text_area("Observaciones Generales de los Equipos", placeholder="Detalle observaciones generales...")
+
+    with st.container(border=True):
+        st.subheader("⚠️ Reporte Específico de Falla en Equipo ROV (En Uso o Stand-by)")
+        st.caption("Use esta sección si necesita reportar una falla puntual en cualquier equipo del centro (por ejemplo, está operando con ROV 2 pero el ROV 1 Stand-by tiene una falla).")
+        reportar_falla_rov = st.radio(
+            "¿Reportar falla específica en algún ROV?",
+            ["Sin fallas específicas", "Sí, reportar falla en un ROV"],
+            horizontal=True,
+            key=f"rad_falla_rov_{centro_et}"
+        )
+        rov_con_falla_str = ""
+        componente_falla_str = ""
+        severidad_falla_str = ""
+        detalle_falla_str = ""
+        if reportar_falla_rov == "Sí, reportar falla en un ROV":
+            opciones_falla_rov = []
+            for rid_f in opciones_rov:
+                eq_f = equipos_et[rid_f]
+                tag_estado = "En Uso" if rid_f == info_rovs_et["activo_id"] else "Stand-by"
+                opciones_falla_rov.append(f"{eq_f['nombre']} (S/N: {eq_f['serie_rov']}) [{tag_estado}]")
+            cf_1, cf_2, cf_3 = st.columns(3)
+            with cf_1:
+                rov_con_falla_str = st.selectbox("¿De qué ROV es la falla?", opciones_falla_rov, key=f"sel_rov_falla_{centro_et}")
+            with cf_2:
+                componentes_sel = st.multiselect(
+                    "Componente(s) con falla",
+                    ["ROV Principal / Propulsores", "Cable Umbilical", "Controlador", "Brazo Grabber", "Cámara / Iluminación", "Batería / Puerto de Carga", "Otro"],
+                    default=["ROV Principal / Propulsores"],
+                    key=f"ms_comp_falla_{centro_et}"
+                )
+                componente_falla_str = ", ".join(componentes_sel) if componentes_sel else "ROV Principal"
+            with cf_3:
+                severidad_falla_str = st.selectbox(
+                    "Severidad / Estado",
+                    ["Requiere cambio / Fuera de servicio", "Operativo con observación (Regular)"],
+                    key=f"sel_sev_falla_{centro_et}"
+                )
+            detalle_falla_str = st.text_area(
+                "Detalle técnico de la falla reportada",
+                placeholder="Ej: ROV 1 presenta falla en propulsor vertical o corte en cable umbilical a los 10 metros...",
+                key=f"txt_det_falla_{centro_et}"
+            )
 
     st.markdown("---")
     st.header("3. Equipamiento de Terreno")
@@ -2454,7 +2640,9 @@ elif st.session_state.current_page == "entrega_turno":
                 "2. Estado de los Equipos (ROV)": {
                     "ROV_En_Uso": rov_uso_str, "ROV_Stand_by": rov_sby_str,
                     "Estado_General_ROV": estado_equipo, "Estado_Controlador": estado_controlador,
-                    "Cable_Umbilical": estado_umbilical, "Observaciones_Equipos": obs_equipos
+                    "Cable_Umbilical": estado_umbilical, "Observaciones_Equipos": obs_equipos,
+                    "ROV_Con_Falla": rov_con_falla_str, "Componente_Falla": componente_falla_str,
+                    "Severidad_Falla": severidad_falla_str, "Detalle_Falla": detalle_falla_str
                 },
                 "3. Terreno": {
                     "Equipamiento_Presente": txt_equipamiento,
@@ -2541,6 +2729,10 @@ elif st.session_state.current_page == "entrega_turno":
                     "alertas_centro": alertas_et,
                     "tareas_pendientes": pendientes_et,
                     "faena_realizada": faena_et,
+                    "rov_con_falla": rov_con_falla_str,
+                    "componente_falla": componente_falla_str,
+                    "severidad_falla": severidad_falla_str,
+                    "detalle_falla": detalle_falla_str,
                 }
                 ok_bd, msg_bd = guardar_entrega_bd(datos_completos_et, datos_basicos_et)
                 if not ok_bd:
@@ -2571,6 +2763,7 @@ elif st.session_state.current_page == "entrega_turno":
                             estado_equipo == "Requiere cambio"
                             or estado_umbilical == "Requiere cambio"
                             or estado_controlador == "Requiere cambio"
+                            or (bool(rov_con_falla_str) and "requiere" in severidad_falla_str.lower())
                         )
                         prefijo = "🚨 ALERTA CRÍTICA - " if es_alerta_critica else "INFO: "
                         msg = MIMEMultipart()
@@ -2994,9 +3187,8 @@ elif st.session_state.current_page == "hpt_nuevo":
                 evidencia_img = st.file_uploader("📸 Evidencia fotográfica de puerto cerrado", type=["png", "jpg", "jpeg"])
 
         area_asignada = st.session_state.db_centros_areas.get(centro, "Desconocida")
-        correo_asignado = st.session_state.db_centros_correos.get(centro, "sin_correo@blumar.com")
-        st.info(f"⚓ Área Asignada: **{area_asignada}** | 📬 Correo Destino: **{correo_asignado}**")
-        correo = correo_asignado
+        st.info(f"⚓ Área Asignada: **{area_asignada}**")
+        correo = ""
 
         st.markdown("🔒 **Asesores de Prevención y Operaciones**")
         col3, col4 = st.columns(2)
@@ -3706,15 +3898,13 @@ elif st.session_state.current_page == "modulo_busqueda":
 
     if (rol_busqueda == "Usuario Común") or (rol_busqueda == "Administrador" and (st.session_state.admin_acceso_historial or es_administrador())):
         if registros_hist:
-            df = pd.DataFrame(registros_hist)
-            if "url_documento" in df.columns:
-                df["url_documento"] = df["url_documento"].apply(lambda x: x if pd.notnull(x) and str(x).strip() != "" else None)
+            df = limpiar_df_vista(pd.DataFrame(registros_hist))
             if modulo_consulta == "HPT":
                 cols_m = ["fecha", "usuario", "centro", "area", "ponton", "condicion_puerto", "url_documento"]
             elif modulo_consulta == "Reportes Diarios":
                 cols_m = ["fecha", "usuario", "centro", "area", "jaula", "tarea", "url_documento"]
             else:
-                cols_m = ["fecha", "usuario", "piloto_entrante", "centro", "area", "rov_en_uso", "estado_rov", "url_documento"]
+                cols_m = ["fecha", "usuario", "piloto_entrante", "centro", "area", "rov_en_uso", "rov_con_falla", "estado_rov", "url_documento"]
             cols_m = [c for c in cols_m if c in df.columns]
             st.dataframe(
                 df[cols_m],
